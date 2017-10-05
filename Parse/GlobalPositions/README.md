@@ -1,2 +1,2 @@
-#Set up for aramys-image name relationships
+# Set up for aramys-image name relationships
 Essentially only needs to be executed once, and then output files stored. The existing output files should be sufficient. Builds up the relationship between aramys names, and the image names used for .ccd files as well as the global position information from aramys
