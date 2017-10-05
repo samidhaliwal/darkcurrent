@@ -1,0 +1,7385 @@
+##############################################################################
+acquisifier:
+post_processing: {
+	global LWDAQ_Info
+	set LWDAQ_Info(queue_ms) 200
+	LWDAQ_print $info(text) "set delay 200" red
+}
+
+config:
+	cycle_period_seconds 0
+end.
+
+
+##############################################################################
+default:
+instrument: BCAM
+
+default_post_processing: {
+	set experr 0
+	set spoterr 0
+	set pixerr 0
+	set exposure 0
+	set avg 0
+	set std 0
+	set max 0
+	set min 0
+	set pixels_in_spot 0
+	set contrast 0
+	set background 0
+	set background_noise 0
+	set im_id 0
+	set readerr 0
+	set error_code 0
+	set disb 0
+	eval $metadata
+	scan $result "%s %s" dum errnum
+	if { $errnum == "-1" } {
+		LWDAQ_print $info(text) "analysis error" red
+		set readerr -201
+	}
+	if { [regexp {ERROR: *} $result] } {
+		LWDAQ_print $info(text) $result red
+		set readerr -200
+	}
+	if { [lwdaq_image_exists $iconfig(memory_name)] != "" } {
+		set imageok 1
+	} else {
+		set imageok 0
+		set readerr -202
+	}
+	if { $readerr == -201 } {
+		set imageok 0 
+	}
+ 	# Write the BCAM image out to the results directory for the analysis program
+ 	# Want to keep image, regardless that it is not good
+	#if {$imageok == 1 } {
+	set fn [file join [file dirname $config(run_results)] $name\.ccd]
+	LWDAQ_write_image_file $iconfig(memory_name) $fn
+	#}
+
+	if {$readerr == 0 } {
+		set error_code 0
+		set pixels_in_spot 0 
+		set contrast  0 
+		set background 0 
+		set background_noise 0 
+		set charac [lwdaq_image_characteristics $iconfig(memory_name)]
+		scan $charac "%d %d %d %d %f %f %f %f" dum1 dum2 dum3 dum4 avg std max min
+		set exposure $iconfig(daq_flash_seconds)
+		set expo [ expr 1000000*$exposure ] 
+	} 
+	set time [clock seconds]
+	set lwdaqerr 0
+
+	if { $readerr !=0 } {
+		set result "$name -1000 -1000 -1 -1 0 0 0 0 0 0 0 0"
+	}
+
+	set lwerr [LWDAQ_is_error_result "$result"]
+	if { $lwerr} {
+		LWDAQ_print $info(text)  "LWDAQ ERROR" red
+		set result "$name -1000 -1000 -1 -1 0 0 0 0 0 0 0 0"
+	}
+
+	if { $readerr ==0 } {
+		scan $result "%s %f %f %d %d %f %d %f %f %d " dummy x y pix int sns thr x2 y2 pix2
+		# check for too many pixels on
+		set pixerr 0
+		if {$pix > 1000} {
+			set pixerr -400
+		}  
+		# check for too large exposure time 
+		set experr 0
+		if {$expo > 90000} {
+			set experr -100
+		}  
+		if {$x2 == -1.0 || $x2==0 || $pix2 < 5} {
+			LWDAQ_print $info(text) "one spot" blue
+			set spoterr 0 
+	   	} else {
+			LWDAQ_print $info(text) "two spots" red
+			set spoterr 0 
+		}
+	}
+
+	set lwdaqerr [ expr $error_code+$spoterr+$pixerr+$experr+$readerr-40*$lwerr]
+	set error_code $lwdaqerr
+	set im_id $imid
+
+	scan $result "%s %f %f %d %d %f %d" dummy x y pix int sns thr
+	set output [ format "%s %d %7.5f %7.5f %7.5f %d\n#DQMB %s %d px %d in %1.3f se %d th %1.0f ex %1.0f av %1.0f st %1.0f mx %1.0f mn %d ec %d np %1.3f co %1.3f bg %1.3f rn" $name $im_id [ expr $x/1000. ] [ expr $y/1000. ] 0.0 $time $name $pix $int $sns $thr [ expr 1000000*$exposure ] $avg $std $max $min $error_code $pixels_in_spot $contrast $background $background_noise ]        
+	
+	set f [open $config(run_results) a]
+	puts $f $output
+	close $f
+	LWDAQ_print $info(text) $output blue
+	set fn [file join [file dirname $config(run_results)] $name\.ccd]
+
+	if { $imageok == 1 } {
+		set fns [file join [file dirname $config(run_results)] $name]
+	}
+	set result $output
+}
+
+
+config:
+	image_source    daq
+	analysis_enable {1}
+	analysis_threshold {25 # 2}
+	analysis_num_spots {2}
+	daq_source_ip_addr {*}
+	ambient_exposure_seconds {0}
+	intensify {exact}
+	daq_adjust_flash {1}
+	daq_subtract_background {0}
+	peak_min {80}
+	peak_max {100}
+	extended_parameters {0.4 0.8 0}
+	flash_seconds_max {0.1}
+	flash_seconds_reduce {0.8}
+	flash_seconds_step {0.000001}
+	flash_seconds_transition {0.000010}
+	flash_max_tries {60}
+end.
+
+
+default:
+instrument: Rasnik
+
+default_post_processing: {
+	set readerr 0
+	set exposure 0  
+	set avg 0
+	set std 0
+	set max 0
+	set min 0
+	set edges_per_line 0
+	set contrast 0
+	set bright_noise 0
+	set dim_noise 0
+	set sharpness 0
+	set im_id 0
+	set disb 0
+	eval $metadata
+	set im_id $imid
+	set errtype 0
+	set lwerr 0
+	set lwerr [LWDAQ_is_error_result "$result"]
+	if { $lwerr} {
+		LWDAQ_print $info(text) "LWDAQ ERROR" red
+		set errtype -3
+		set readerr -203
+	}
+	
+	scan $result "%s %s" dum errnum
+	if { $errnum == "-1" } {
+		LWDAQ_print $info(text) "analysis error" red
+		set errtype -1
+		set readerr -201
+	}
+
+	if { [regexp {ERROR: *} $result] } {
+		LWDAQ_print $info(text) $result red
+		set errtype -4
+		set readerr -200
+	}
+
+	LWDAQ_print $info(text) $errtype red
+
+	# check for image exists:    1 means exists
+	if { [lwdaq_image_exists $iconfig(memory_name)] != "" } {
+		set imageok 1
+	} else {
+		set imageok 0
+		set readerr -202
+	}
+	if { $readerr == -201 } {
+		set imageok 0 
+	}
+	
+	if { $imageok == 0 } {
+		LWDAQ_print $info(text) "noimage" red
+		LWDAQ_print $info(text) $readerr red
+	}
+	#if { $imageok == 1 } {
+	#Want to keep image even though not okay
+	set fn [file join [file dirname $config(run_results)] $name\.ccd]
+	LWDAQ_write_image_file $iconfig(memory_name) $fn
+	#}
+   set error_code 0
+
+	if { $readerr == 0 } {
+		set charac [lwdaq_image_characteristics $iconfig(memory_name)]
+		scan $charac "%d %d %d %d %f %f %f %f" dum1 dum2 dum3 dum4 avg std max min
+		set exposure $iconfig(daq_flash_seconds)
+	} 
+	set time [clock seconds]
+	
+	if { $readerr !=0 } {
+		LWDAQ_print $info(text) $readerr red
+		LWDAQ_print $info(text) $name red
+		set result "$name -1000 -1000 -1 -1 0 0 0 0 0 0 0 0"
+	}
+
+	set lwdaqerr [expr  $error_code+$readerr]
+	set error_code $lwdaqerr
+	scan $result "%s %f %f %f %f %f %f %f %f %d %d %f %f" dum x y z1 z2 rot err sqs pxs ori refc refx refy
+	set output [ format "%s %d %7.4f %7.4f %8.6f %d\n#DQMR %s %9.6f dm %1.3f ro %1.2f dx %1.0f sq %d or %d rf %1.0f ex %1.0f av %1.0f st %1.0f mx %1.0f mn %d ec %1.3f el %1.3f co %1.3f ln %1.3f dn %1.3f sh" $name  $im_id [ expr $x/1000. ] [ expr $y/1000. ] [ expr 1./(0.5*($z1+$z2)) ] $time $name [ expr 0.5*($z1-$z2) ] $rot $err $sqs $ori $refc [ expr 1000000*$exposure ] $avg $std $max $min $error_code $edges_per_line $contrast $bright_noise $dim_noise $sharpness]
+
+	set f [open $config(run_results) a]
+	puts $f $output
+	close $f
+	LWDAQ_print $info(text) $output blue
+
+	if { $imageok == 1 } {
+		set fns [file join [file dirname $config(run_results)] $name]
+	}
+	set result $output
+}
+
+config:
+	image_source    daq
+	analysis_enable {2}
+	daq_source_ip_addr {*}
+	intensify {exact}
+	daq_adjust_flash {1}
+	daq_subtract_background {0}
+	peak_min {140}
+	peak_max {160}
+	extended_parameters {0.3 0.95}
+	analysis_max_tries {20}
+	flash_seconds_max {0.5}
+	flash_seconds_reduce {0.8}
+	flash_seconds_step {0.000001}
+	flash_seconds_transition {0.000010}
+	flash_max_tries {60}
+end.
+
+
+default:
+instrument: Thermometer
+default_post_processing: {
+	set time [clock seconds]
+	set error_code 0
+	set im_id 0
+	eval $metadata
+	set im_id $imid
+	scan $result "%s %f %f " dum temp tsd	
+	if { $tsd < 0.001 || $tsd > 0.2 } {
+		set error_code -1 
+	}
+ 	if { [regexp {TBA_901_*} $name]} {
+		if { $tsd < 4.00  } {
+			set error_code 2
+		}
+	} 
+
+	set output [ format "%s %d 0 0 %9.3f %9.4f %d %d  " $name $im_id $temp $tsd $error_code $time ]
+	set f [open $config(run_results) a]
+	puts $f $output
+	close $f
+	LWDAQ_print $info(text) $output blue
+	set result $output
+}
+
+config:
+	image_source    "daq"
+	analysis_enable          "2"
+end.
+
+default:
+instrument: Diagnostic
+default_post_processing: {
+	set error_code 0
+	set im_id 0
+	eval $metadata
+	set im_id $imid
+	set time [clock seconds]
+	set ip_addr $iconfig(daq_ip_addr)
+	set driver_sock $iconfig(daq_driver_socket)
+	set retries [expr $iinfo(psc_num_tries)-$iconfig(daq_psc) ]
+	scan $result "%s %d %d %d %d %d %d %f %f %f %f %f %f %f %f" dum0 dum1 dum2 dum3 dum4 dum5 dum6 pos5V pos5C pos15V pos15C neg15V neg15C dum7 dum8
+	set output [ format "%s %d %3.3f %3.3f %3.3f %3.3f %3.3f %3.3f %s %s %d %d" $name $im_id $pos15V $pos15C $pos5V $pos5C $neg15V $neg15C $ip_addr $driver_sock $time $retries ]
+	set result $output
+}
+
+config:
+	psc_max_tries {10}
+end.
+
+acquire:
+name: {DRIVER_AEM_01_ON}
+metadata: {set imid -10001}   
+instrument: {Diagnostic}
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00100000:1}
+	daq_actions {off 500 on 500 sleepall 500 sleepall}
+	daq_psc {1}
+	max_p15_mA {125}
+	max_p5_mA {177}
+	max_n15_mA {100}
+end.
+
+acquire:
+name: {BSD_AEM_16_16_C2}
+instrument: {BCAM}
+metadata: {set imid 4560}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00100000:2}
+	daq_mux_socket {1}
+	daq_device_element {1}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00100000:4}
+	daq_source_mux_socket {4}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BSD_AEM_16_16_C3}
+instrument: {BCAM}
+metadata: {set imid 4562}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00100000:2}
+	daq_mux_socket {8}
+	daq_device_element {1}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00100000:5}
+	daq_source_mux_socket {4}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {DRIVER_AEM_02_ON}
+metadata: {set imid -10002}   
+instrument: {Diagnostic}
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00200000:1}
+	daq_actions {off 500 on 500 sleepall 500 sleepall}
+	daq_psc {1}
+	max_p15_mA {125}
+	max_p5_mA {186}
+	max_n15_mA {99}
+end.
+
+acquire:
+name: {BRD_AEM_16_R1_R2}
+instrument: {BCAM}
+metadata: {set imid 4298}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00100000:1}
+	daq_mux_socket {4}
+	daq_device_element {2}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00200000:1}
+	daq_source_mux_socket {2}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BRD_AEM_16_R2_R1}
+instrument: {BCAM}
+metadata: {set imid 4300}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00200000:1}
+	daq_mux_socket {2}
+	daq_device_element {1}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00100000:1}
+	daq_source_mux_socket {4}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BSD_AEM_16_01_C1}
+instrument: {BCAM}
+metadata: {set imid 4528}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00100000:1}
+	daq_mux_socket {8}
+	daq_device_element {1}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00200000:3}
+	daq_source_mux_socket {3}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {74}
+	peak_max {93}
+end.
+
+acquire:
+name: {BSD_AEM_16_01_C2}
+instrument: {BCAM}
+metadata: {set imid 4530}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00100000:2}
+	daq_mux_socket {2}
+	daq_device_element {1}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00200000:4}
+	daq_source_mux_socket {4}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BSD_AEM_16_01_C3}
+instrument: {BCAM}
+metadata: {set imid 4532}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00100000:2}
+	daq_mux_socket {9}
+	daq_device_element {1}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00200000:5}
+	daq_source_mux_socket {4}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BSD_AEM_16_16_C4}
+instrument: {BCAM}
+metadata: {set imid 4564}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00200000:1}
+	daq_mux_socket {8}
+	daq_device_element {1}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00100000:6}
+	daq_source_mux_socket {4}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BSD_AEM_16_16_C5}
+instrument: {BCAM}
+metadata: {set imid 4566}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00200000:2}
+	daq_mux_socket {4}
+	daq_device_element {1}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00100000:7}
+	daq_source_mux_socket {4}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {DRIVER_AEM_03_ON}
+metadata: {set imid -10003}   
+instrument: {Diagnostic}
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00300000:1}
+	daq_actions {off 500 on 500 sleepall 500 sleepall}
+	daq_psc {1}
+	max_p15_mA {125}
+	max_p5_mA {179}
+	max_n15_mA {99}
+end.
+
+acquire:
+name: {BAZ_AEM_02_16_C1}
+instrument: {BCAM}
+metadata: {set imid 3126}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00300000:1}
+	daq_mux_socket {7}
+	daq_device_element {2}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00100000:1}
+	daq_source_mux_socket {8}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BAZ_AEM_02_16_C2}
+instrument: {BCAM}
+metadata: {set imid 3128}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00300000:2}
+	daq_mux_socket {1}
+	daq_device_element {2}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00100000:2}
+	daq_source_mux_socket {2}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BAZ_AEM_02_16_C3}
+instrument: {BCAM}
+metadata: {set imid 3130}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00300000:2}
+	daq_mux_socket {8}
+	daq_device_element {2}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00100000:2}
+	daq_source_mux_socket {9}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BAZ_AEM_16_02_C1}
+instrument: {BCAM}
+metadata: {set imid 3846}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00100000:1}
+	daq_mux_socket {8}
+	daq_device_element {2}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00300000:1}
+	daq_source_mux_socket {7}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {74}
+	peak_max {93}
+end.
+
+acquire:
+name: {BAZ_AEM_16_02_C2}
+instrument: {BCAM}
+metadata: {set imid 3848}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00100000:2}
+	daq_mux_socket {2}
+	daq_device_element {2}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00300000:2}
+	daq_source_mux_socket {1}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BAZ_AEM_16_02_C3}
+instrument: {BCAM}
+metadata: {set imid 3850}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00100000:2}
+	daq_mux_socket {9}
+	daq_device_element {2}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00300000:2}
+	daq_source_mux_socket {8}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BSD_AEM_16_02_C1}
+instrument: {BCAM}
+metadata: {set imid 4538}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00100000:1}
+	daq_mux_socket {8}
+	daq_device_element {1}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00300000:3}
+	daq_source_mux_socket {3}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {75}
+	peak_max {94}
+end.
+
+acquire:
+name: {BSD_AEM_16_02_C2}
+instrument: {BCAM}
+metadata: {set imid 4540}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00100000:2}
+	daq_mux_socket {2}
+	daq_device_element {1}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00300000:4}
+	daq_source_mux_socket {4}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BSD_AEM_16_02_C3}
+instrument: {BCAM}
+metadata: {set imid 4542}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00100000:2}
+	daq_mux_socket {9}
+	daq_device_element {1}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00300000:5}
+	daq_source_mux_socket {4}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {DRIVER_AEM_01_OFF}
+metadata: {set imid -10021}   
+instrument: {Diagnostic}
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00100000:1}
+	daq_actions {off}
+	daq_psc {0}
+end.
+
+acquire:
+name: {BRD_AEM_16_R2_R3}
+instrument: {BCAM}
+metadata: {set imid 4302}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00200000:1}
+	daq_mux_socket {2}
+	daq_device_element {2}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00200000:2}
+	daq_source_mux_socket {9}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BRD_AEM_16_R3_R2}
+instrument: {BCAM}
+metadata: {set imid 4304}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00200000:2}
+	daq_mux_socket {9}
+	daq_device_element {1}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00200000:1}
+	daq_source_mux_socket {2}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BSD_AEM_16_01_C4}
+instrument: {BCAM}
+metadata: {set imid 4534}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00200000:1}
+	daq_mux_socket {3}
+	daq_device_element {1}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00200000:6}
+	daq_source_mux_socket {4}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BSD_AEM_16_01_C5}
+instrument: {BCAM}
+metadata: {set imid 4536}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00200000:2}
+	daq_mux_socket {5}
+	daq_device_element {1}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00200000:7}
+	daq_source_mux_socket {4}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BSD_AEM_02_01_C1}
+instrument: {BCAM}
+metadata: {set imid 5151}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00300000:1}
+	daq_mux_socket {7}
+	daq_device_element {1}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00200000:3}
+	daq_source_mux_socket {3}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BSD_AEM_02_01_C2}
+instrument: {BCAM}
+metadata: {set imid 5153}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00300000:2}
+	daq_mux_socket {1}
+	daq_device_element {1}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00200000:4}
+	daq_source_mux_socket {4}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BSD_AEM_02_01_C3}
+instrument: {BCAM}
+metadata: {set imid 5155}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00300000:2}
+	daq_mux_socket {8}
+	daq_device_element {1}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00200000:5}
+	daq_source_mux_socket {4}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BSD_AEM_16_02_C4}
+instrument: {BCAM}
+metadata: {set imid 4544}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00200000:1}
+	daq_mux_socket {3}
+	daq_device_element {1}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00300000:6}
+	daq_source_mux_socket {4}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BSD_AEM_16_02_C5}
+instrument: {BCAM}
+metadata: {set imid 4546}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00200000:2}
+	daq_mux_socket {5}
+	daq_device_element {1}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00300000:7}
+	daq_source_mux_socket {4}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {DRIVER_AEM_04_ON}
+metadata: {set imid -10004}   
+instrument: {Diagnostic}
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00400000:1}
+	daq_actions {off 500 on 500 sleepall 500 sleepall}
+	daq_psc {1}
+	max_p15_mA {123}
+	max_p5_mA {184}
+	max_n15_mA {99}
+end.
+
+acquire:
+name: {BAZ_AEM_02_16_C4}
+instrument: {BCAM}
+metadata: {set imid 3132}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00400000:1}
+	daq_mux_socket {8}
+	daq_device_element {2}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00200000:1}
+	daq_source_mux_socket {3}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BAZ_AEM_02_16_C5}
+instrument: {BCAM}
+metadata: {set imid 3134}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00400000:2}
+	daq_mux_socket {4}
+	daq_device_element {2}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00200000:2}
+	daq_source_mux_socket {5}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BAZ_AEM_16_02_C4}
+instrument: {BCAM}
+metadata: {set imid 3852}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00200000:1}
+	daq_mux_socket {3}
+	daq_device_element {2}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00400000:1}
+	daq_source_mux_socket {8}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BAZ_AEM_16_02_C5}
+instrument: {BCAM}
+metadata: {set imid 3854}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00200000:2}
+	daq_mux_socket {5}
+	daq_device_element {2}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00400000:2}
+	daq_source_mux_socket {4}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BSD_AEM_02_01_C4}
+instrument: {BCAM}
+metadata: {set imid 5157}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00400000:1}
+	daq_mux_socket {8}
+	daq_device_element {1}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00200000:6}
+	daq_source_mux_socket {4}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BSD_AEM_02_01_C5}
+instrument: {BCAM}
+metadata: {set imid 5159}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00400000:2}
+	daq_mux_socket {4}
+	daq_device_element {1}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00200000:7}
+	daq_source_mux_socket {4}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {DRIVER_AEM_02_OFF}
+metadata: {set imid -10022}   
+instrument: {Diagnostic}
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00200000:1}
+	daq_actions {off}
+	daq_psc {0}
+end.
+
+acquire:
+name: {BSD_AEM_02_02_C2}
+instrument: {BCAM}
+metadata: {set imid 5163}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00300000:2}
+	daq_mux_socket {1}
+	daq_device_element {1}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00300000:4}
+	daq_source_mux_socket {4}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BSD_AEM_02_02_C3}
+instrument: {BCAM}
+metadata: {set imid 5165}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00300000:2}
+	daq_mux_socket {8}
+	daq_device_element {1}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00300000:5}
+	daq_source_mux_socket {4}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BRD_AEM_02_R1_R2}
+instrument: {BCAM}
+metadata: {set imid 9247}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00300000:1}
+	daq_mux_socket {4}
+	daq_device_element {2}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00400000:1}
+	daq_source_mux_socket {2}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BRD_AEM_02_R2_R1}
+instrument: {BCAM}
+metadata: {set imid 9249}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00400000:1}
+	daq_mux_socket {2}
+	daq_device_element {1}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00300000:1}
+	daq_source_mux_socket {4}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BSD_AEM_02_02_C4}
+instrument: {BCAM}
+metadata: {set imid 5167}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00400000:1}
+	daq_mux_socket {8}
+	daq_device_element {1}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00300000:6}
+	daq_source_mux_socket {4}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BSD_AEM_02_02_C5}
+instrument: {BCAM}
+metadata: {set imid 5169}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00400000:2}
+	daq_mux_socket {4}
+	daq_device_element {1}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00300000:7}
+	daq_source_mux_socket {4}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BSD_AEM_02_03_C1}
+instrument: {BCAM}
+metadata: {set imid 5171}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00300000:1}
+	daq_mux_socket {8}
+	daq_device_element {1}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00400000:3}
+	daq_source_mux_socket {3}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BSD_AEM_02_03_C2}
+instrument: {BCAM}
+metadata: {set imid 5173}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00300000:2}
+	daq_mux_socket {2}
+	daq_device_element {1}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00400000:4}
+	daq_source_mux_socket {4}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BSD_AEM_02_03_C3}
+instrument: {BCAM}
+metadata: {set imid 5175}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00300000:2}
+	daq_mux_socket {9}
+	daq_device_element {1}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00400000:5}
+	daq_source_mux_socket {4}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {DRIVER_AEM_05_ON}
+metadata: {set imid -10005}   
+instrument: {Diagnostic}
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00500000:1}
+	daq_actions {off 500 on 500 sleepall 500 sleepall}
+	daq_psc {1}
+	max_p15_mA {123}
+	max_p5_mA {177}
+	max_n15_mA {97}
+end.
+
+acquire:
+name: {BAZ_AEM_02_04_C1}
+instrument: {BCAM}
+metadata: {set imid 3116}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00300000:1}
+	daq_mux_socket {8}
+	daq_device_element {2}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00500000:1}
+	daq_source_mux_socket {7}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BAZ_AEM_02_04_C2}
+instrument: {BCAM}
+metadata: {set imid 3118}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00300000:2}
+	daq_mux_socket {2}
+	daq_device_element {2}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00500000:2}
+	daq_source_mux_socket {1}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BAZ_AEM_02_04_C3}
+instrument: {BCAM}
+metadata: {set imid 3120}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00300000:2}
+	daq_mux_socket {9}
+	daq_device_element {2}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00500000:2}
+	daq_source_mux_socket {8}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BAZ_AEM_04_02_C1}
+instrument: {BCAM}
+metadata: {set imid 3136}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00500000:1}
+	daq_mux_socket {7}
+	daq_device_element {2}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00300000:1}
+	daq_source_mux_socket {8}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BAZ_AEM_04_02_C2}
+instrument: {BCAM}
+metadata: {set imid 3138}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00500000:2}
+	daq_mux_socket {1}
+	daq_device_element {2}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00300000:2}
+	daq_source_mux_socket {2}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BAZ_AEM_04_02_C3}
+instrument: {BCAM}
+metadata: {set imid 3140}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00500000:2}
+	daq_mux_socket {8}
+	daq_device_element {2}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00300000:2}
+	daq_source_mux_socket {9}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BSD_AEM_02_04_C1}
+instrument: {BCAM}
+metadata: {set imid 5181}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00300000:1}
+	daq_mux_socket {8}
+	daq_device_element {1}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00500000:3}
+	daq_source_mux_socket {3}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BSD_AEM_02_04_C2}
+instrument: {BCAM}
+metadata: {set imid 5183}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00300000:2}
+	daq_mux_socket {2}
+	daq_device_element {1}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00500000:4}
+	daq_source_mux_socket {4}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BSD_AEM_02_04_C3}
+instrument: {BCAM}
+metadata: {set imid 5185}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00300000:2}
+	daq_mux_socket {9}
+	daq_device_element {1}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00500000:5}
+	daq_source_mux_socket {4}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {DRIVER_AEM_03_OFF}
+metadata: {set imid -10023}   
+instrument: {Diagnostic}
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00300000:1}
+	daq_actions {off}
+	daq_psc {0}
+end.
+
+acquire:
+name: {BRD_AEM_02_R2_R3}
+instrument: {BCAM}
+metadata: {set imid 9251}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00400000:1}
+	daq_mux_socket {2}
+	daq_device_element {2}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00400000:2}
+	daq_source_mux_socket {9}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BRD_AEM_02_R3_R2}
+instrument: {BCAM}
+metadata: {set imid 9253}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00400000:2}
+	daq_mux_socket {9}
+	daq_device_element {1}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00400000:1}
+	daq_source_mux_socket {2}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BSD_AEM_02_03_C4}
+instrument: {BCAM}
+metadata: {set imid 5177}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00400000:1}
+	daq_mux_socket {3}
+	daq_device_element {1}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00400000:6}
+	daq_source_mux_socket {4}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BSD_AEM_02_03_C5}
+instrument: {BCAM}
+metadata: {set imid 5179}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00400000:2}
+	daq_mux_socket {5}
+	daq_device_element {1}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00400000:7}
+	daq_source_mux_socket {4}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {78}
+	peak_max {98}
+end.
+
+acquire:
+name: {BSD_AEM_02_04_C4}
+instrument: {BCAM}
+metadata: {set imid 5187}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00400000:1}
+	daq_mux_socket {3}
+	daq_device_element {1}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00500000:6}
+	daq_source_mux_socket {4}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BSD_AEM_02_04_C5}
+instrument: {BCAM}
+metadata: {set imid 5189}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00400000:2}
+	daq_mux_socket {5}
+	daq_device_element {1}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00500000:7}
+	daq_source_mux_socket {4}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {77}
+	peak_max {97}
+end.
+
+acquire:
+name: {BSD_AEM_04_03_C1}
+instrument: {BCAM}
+metadata: {set imid 5191}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00500000:1}
+	daq_mux_socket {7}
+	daq_device_element {1}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00400000:3}
+	daq_source_mux_socket {3}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BSD_AEM_04_03_C2}
+instrument: {BCAM}
+metadata: {set imid 5193}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00500000:2}
+	daq_mux_socket {1}
+	daq_device_element {1}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00400000:4}
+	daq_source_mux_socket {4}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BSD_AEM_04_03_C3}
+instrument: {BCAM}
+metadata: {set imid 5195}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00500000:2}
+	daq_mux_socket {8}
+	daq_device_element {1}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00400000:5}
+	daq_source_mux_socket {4}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {DRIVER_AEM_06_ON}
+metadata: {set imid -10006}   
+instrument: {Diagnostic}
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00600000:1}
+	daq_actions {off 500 on 500 sleepall 500 sleepall}
+	daq_psc {1}
+	max_p15_mA {125}
+	max_p5_mA {189}
+	max_n15_mA {99}
+end.
+
+acquire:
+name: {BAZ_AEM_02_04_C4}
+instrument: {BCAM}
+metadata: {set imid 3122}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00400000:1}
+	daq_mux_socket {3}
+	daq_device_element {2}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00600000:1}
+	daq_source_mux_socket {8}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BAZ_AEM_02_04_C5}
+instrument: {BCAM}
+metadata: {set imid 3124}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00400000:2}
+	daq_mux_socket {5}
+	daq_device_element {2}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00600000:2}
+	daq_source_mux_socket {4}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {78}
+	peak_max {98}
+end.
+
+acquire:
+name: {BAZ_AEM_04_02_C4}
+instrument: {BCAM}
+metadata: {set imid 3142}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00600000:1}
+	daq_mux_socket {8}
+	daq_device_element {2}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00400000:1}
+	daq_source_mux_socket {3}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BAZ_AEM_04_02_C5}
+instrument: {BCAM}
+metadata: {set imid 3144}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00600000:2}
+	daq_mux_socket {4}
+	daq_device_element {2}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00400000:2}
+	daq_source_mux_socket {5}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BSD_AEM_04_03_C4}
+instrument: {BCAM}
+metadata: {set imid 5197}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00600000:1}
+	daq_mux_socket {8}
+	daq_device_element {1}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00400000:6}
+	daq_source_mux_socket {4}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BSD_AEM_04_03_C5}
+instrument: {BCAM}
+metadata: {set imid 5199}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00600000:2}
+	daq_mux_socket {4}
+	daq_device_element {1}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00400000:7}
+	daq_source_mux_socket {4}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {DRIVER_AEM_04_OFF}
+metadata: {set imid -10024}   
+instrument: {Diagnostic}
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00400000:1}
+	daq_actions {off}
+	daq_psc {0}
+end.
+
+acquire:
+name: {BSD_AEM_04_04_C2}
+instrument: {BCAM}
+metadata: {set imid 5203}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00500000:2}
+	daq_mux_socket {1}
+	daq_device_element {1}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00500000:4}
+	daq_source_mux_socket {4}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BSD_AEM_04_04_C3}
+instrument: {BCAM}
+metadata: {set imid 5205}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00500000:2}
+	daq_mux_socket {8}
+	daq_device_element {1}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00500000:5}
+	daq_source_mux_socket {4}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BRD_AEM_04_R1_R2}
+instrument: {BCAM}
+metadata: {set imid 9255}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00500000:1}
+	daq_mux_socket {4}
+	daq_device_element {2}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00600000:1}
+	daq_source_mux_socket {2}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BRD_AEM_04_R2_R1}
+instrument: {BCAM}
+metadata: {set imid 9257}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00600000:1}
+	daq_mux_socket {2}
+	daq_device_element {1}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00500000:1}
+	daq_source_mux_socket {4}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BSD_AEM_04_04_C4}
+instrument: {BCAM}
+metadata: {set imid 5207}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00600000:1}
+	daq_mux_socket {8}
+	daq_device_element {1}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00500000:6}
+	daq_source_mux_socket {4}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BSD_AEM_04_04_C5}
+instrument: {BCAM}
+metadata: {set imid 5209}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00600000:2}
+	daq_mux_socket {4}
+	daq_device_element {1}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00500000:7}
+	daq_source_mux_socket {4}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BSD_AEM_04_05_C1}
+instrument: {BCAM}
+metadata: {set imid 5211}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00500000:1}
+	daq_mux_socket {8}
+	daq_device_element {1}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00600000:3}
+	daq_source_mux_socket {3}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BSD_AEM_04_05_C2}
+instrument: {BCAM}
+metadata: {set imid 5213}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00500000:2}
+	daq_mux_socket {2}
+	daq_device_element {1}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00600000:4}
+	daq_source_mux_socket {4}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BSD_AEM_04_05_C3}
+instrument: {BCAM}
+metadata: {set imid 5215}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00500000:2}
+	daq_mux_socket {9}
+	daq_device_element {1}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00600000:5}
+	daq_source_mux_socket {4}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {DRIVER_AEM_07_ON}
+metadata: {set imid -10007}   
+instrument: {Diagnostic}
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00700000:1}
+	daq_actions {off 500 on 500 sleepall 500 sleepall}
+	daq_psc {1}
+	max_p15_mA {122}
+	max_p5_mA {177}
+	max_n15_mA {98}
+end.
+
+acquire:
+name: {BAZ_AEM_04_06_C1}
+instrument: {BCAM}
+metadata: {set imid 3146}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00500000:1}
+	daq_mux_socket {8}
+	daq_device_element {2}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00700000:1}
+	daq_source_mux_socket {7}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BAZ_AEM_04_06_C2}
+instrument: {BCAM}
+metadata: {set imid 3148}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00500000:2}
+	daq_mux_socket {2}
+	daq_device_element {2}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00700000:2}
+	daq_source_mux_socket {1}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BAZ_AEM_04_06_C3}
+instrument: {BCAM}
+metadata: {set imid 3150}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00500000:2}
+	daq_mux_socket {9}
+	daq_device_element {2}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00700000:2}
+	daq_source_mux_socket {8}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BAZ_AEM_06_04_C1}
+instrument: {BCAM}
+metadata: {set imid 3156}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00700000:1}
+	daq_mux_socket {7}
+	daq_device_element {2}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00500000:1}
+	daq_source_mux_socket {8}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BAZ_AEM_06_04_C2}
+instrument: {BCAM}
+metadata: {set imid 3158}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00700000:2}
+	daq_mux_socket {1}
+	daq_device_element {2}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00500000:2}
+	daq_source_mux_socket {2}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BAZ_AEM_06_04_C3}
+instrument: {BCAM}
+metadata: {set imid 3160}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00700000:2}
+	daq_mux_socket {8}
+	daq_device_element {2}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00500000:2}
+	daq_source_mux_socket {9}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BSD_AEM_04_06_C1}
+instrument: {BCAM}
+metadata: {set imid 3646}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00500000:1}
+	daq_mux_socket {8}
+	daq_device_element {1}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00700000:3}
+	daq_source_mux_socket {3}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BSD_AEM_04_06_C2}
+instrument: {BCAM}
+metadata: {set imid 3648}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00500000:2}
+	daq_mux_socket {2}
+	daq_device_element {1}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00700000:4}
+	daq_source_mux_socket {4}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BSD_AEM_04_06_C3}
+instrument: {BCAM}
+metadata: {set imid 3650}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00500000:2}
+	daq_mux_socket {9}
+	daq_device_element {1}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00700000:5}
+	daq_source_mux_socket {4}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {DRIVER_AEM_05_OFF}
+metadata: {set imid -10025}   
+instrument: {Diagnostic}
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00500000:1}
+	daq_actions {off}
+	daq_psc {0}
+end.
+
+acquire:
+name: {BRD_AEM_04_R2_R3}
+instrument: {BCAM}
+metadata: {set imid 9259}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00600000:1}
+	daq_mux_socket {2}
+	daq_device_element {2}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00600000:2}
+	daq_source_mux_socket {9}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BRD_AEM_04_R3_R2}
+instrument: {BCAM}
+metadata: {set imid 9261}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00600000:2}
+	daq_mux_socket {9}
+	daq_device_element {1}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00600000:1}
+	daq_source_mux_socket {2}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BSD_AEM_04_05_C4}
+instrument: {BCAM}
+metadata: {set imid 5217}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00600000:1}
+	daq_mux_socket {3}
+	daq_device_element {1}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00600000:6}
+	daq_source_mux_socket {4}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BSD_AEM_04_05_C5}
+instrument: {BCAM}
+metadata: {set imid 5219}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00600000:2}
+	daq_mux_socket {5}
+	daq_device_element {1}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00600000:7}
+	daq_source_mux_socket {4}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BSD_AEM_04_06_C4}
+instrument: {BCAM}
+metadata: {set imid 3652}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00600000:1}
+	daq_mux_socket {3}
+	daq_device_element {1}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00700000:6}
+	daq_source_mux_socket {4}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BSD_AEM_04_06_C5}
+instrument: {BCAM}
+metadata: {set imid 3654}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00600000:2}
+	daq_mux_socket {5}
+	daq_device_element {1}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00700000:7}
+	daq_source_mux_socket {4}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BSD_AEM_06_05_C1}
+instrument: {BCAM}
+metadata: {set imid 3656}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00700000:1}
+	daq_mux_socket {7}
+	daq_device_element {1}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00600000:3}
+	daq_source_mux_socket {3}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BSD_AEM_06_05_C2}
+instrument: {BCAM}
+metadata: {set imid 3658}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00700000:2}
+	daq_mux_socket {1}
+	daq_device_element {1}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00600000:4}
+	daq_source_mux_socket {4}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BSD_AEM_06_05_C3}
+instrument: {BCAM}
+metadata: {set imid 3660}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00700000:2}
+	daq_mux_socket {8}
+	daq_device_element {1}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00600000:5}
+	daq_source_mux_socket {4}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {DRIVER_AEM_08_ON}
+metadata: {set imid -10008}   
+instrument: {Diagnostic}
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00800000:1}
+	daq_actions {off 500 on 500 sleepall 500 sleepall}
+	daq_psc {1}
+	max_p15_mA {123}
+	max_p5_mA {181}
+	max_n15_mA {98}
+end.
+
+acquire:
+name: {BAZ_AEM_04_06_C4}
+instrument: {BCAM}
+metadata: {set imid 3152}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00600000:1}
+	daq_mux_socket {3}
+	daq_device_element {2}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00800000:1}
+	daq_source_mux_socket {8}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BAZ_AEM_04_06_C5}
+instrument: {BCAM}
+metadata: {set imid 3154}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00600000:2}
+	daq_mux_socket {5}
+	daq_device_element {2}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00800000:2}
+	daq_source_mux_socket {4}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BAZ_AEM_06_04_C4}
+instrument: {BCAM}
+metadata: {set imid 3162}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00800000:1}
+	daq_mux_socket {8}
+	daq_device_element {2}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00600000:1}
+	daq_source_mux_socket {3}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BAZ_AEM_06_04_C5}
+instrument: {BCAM}
+metadata: {set imid 3164}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00800000:2}
+	daq_mux_socket {4}
+	daq_device_element {2}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00600000:2}
+	daq_source_mux_socket {5}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BSD_AEM_06_05_C4}
+instrument: {BCAM}
+metadata: {set imid 3662}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00800000:1}
+	daq_mux_socket {8}
+	daq_device_element {1}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00600000:6}
+	daq_source_mux_socket {4}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BSD_AEM_06_05_C5}
+instrument: {BCAM}
+metadata: {set imid 3664}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00800000:2}
+	daq_mux_socket {4}
+	daq_device_element {1}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00600000:7}
+	daq_source_mux_socket {4}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {DRIVER_AEM_06_OFF}
+metadata: {set imid -10026}   
+instrument: {Diagnostic}
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00600000:1}
+	daq_actions {off}
+	daq_psc {0}
+end.
+
+acquire:
+name: {BSD_AEM_06_06_C2}
+instrument: {BCAM}
+metadata: {set imid 3668}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00700000:2}
+	daq_mux_socket {1}
+	daq_device_element {1}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00700000:4}
+	daq_source_mux_socket {4}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BSD_AEM_06_06_C3}
+instrument: {BCAM}
+metadata: {set imid 3670}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00700000:2}
+	daq_mux_socket {8}
+	daq_device_element {1}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00700000:5}
+	daq_source_mux_socket {4}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BRD_AEM_06_R1_R2}
+instrument: {BCAM}
+metadata: {set imid 9263}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00700000:1}
+	daq_mux_socket {4}
+	daq_device_element {2}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00800000:1}
+	daq_source_mux_socket {2}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BRD_AEM_06_R2_R1}
+instrument: {BCAM}
+metadata: {set imid 9265}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00800000:1}
+	daq_mux_socket {2}
+	daq_device_element {1}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00700000:1}
+	daq_source_mux_socket {4}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BSD_AEM_06_06_C4}
+instrument: {BCAM}
+metadata: {set imid 3672}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00800000:1}
+	daq_mux_socket {8}
+	daq_device_element {1}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00700000:6}
+	daq_source_mux_socket {4}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BSD_AEM_06_06_C5}
+instrument: {BCAM}
+metadata: {set imid 3674}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00800000:2}
+	daq_mux_socket {4}
+	daq_device_element {1}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00700000:7}
+	daq_source_mux_socket {4}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BSD_AEM_06_07_C1}
+instrument: {BCAM}
+metadata: {set imid 3676}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00700000:1}
+	daq_mux_socket {8}
+	daq_device_element {1}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00800000:3}
+	daq_source_mux_socket {3}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BSD_AEM_06_07_C2}
+instrument: {BCAM}
+metadata: {set imid 3678}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00700000:2}
+	daq_mux_socket {2}
+	daq_device_element {1}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00800000:4}
+	daq_source_mux_socket {4}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BSD_AEM_06_07_C3}
+instrument: {BCAM}
+metadata: {set imid 3680}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00700000:2}
+	daq_mux_socket {9}
+	daq_device_element {1}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00800000:5}
+	daq_source_mux_socket {4}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {DRIVER_AEM_09_ON}
+metadata: {set imid -10009}   
+instrument: {Diagnostic}
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00900000:1}
+	daq_actions {off 500 on 500 sleepall 500 sleepall}
+	daq_psc {1}
+	max_p15_mA {124}
+	max_p5_mA {178}
+	max_n15_mA {98}
+end.
+
+acquire:
+name: {BAZ_AEM_06_08_C1}
+instrument: {BCAM}
+metadata: {set imid 3166}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00700000:1}
+	daq_mux_socket {8}
+	daq_device_element {2}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00900000:1}
+	daq_source_mux_socket {7}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BAZ_AEM_06_08_C2}
+instrument: {BCAM}
+metadata: {set imid 3168}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00700000:2}
+	daq_mux_socket {2}
+	daq_device_element {2}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00900000:2}
+	daq_source_mux_socket {1}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BAZ_AEM_06_08_C3}
+instrument: {BCAM}
+metadata: {set imid 3170}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00700000:2}
+	daq_mux_socket {9}
+	daq_device_element {2}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00900000:2}
+	daq_source_mux_socket {8}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BAZ_AEM_08_06_C1}
+instrument: {BCAM}
+metadata: {set imid 3176}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00900000:1}
+	daq_mux_socket {7}
+	daq_device_element {2}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00700000:1}
+	daq_source_mux_socket {8}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BAZ_AEM_08_06_C2}
+instrument: {BCAM}
+metadata: {set imid 3178}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00900000:2}
+	daq_mux_socket {1}
+	daq_device_element {2}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00700000:2}
+	daq_source_mux_socket {2}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BAZ_AEM_08_06_C3}
+instrument: {BCAM}
+metadata: {set imid 3180}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00900000:2}
+	daq_mux_socket {8}
+	daq_device_element {2}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00700000:2}
+	daq_source_mux_socket {9}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BSD_AEM_06_08_C1}
+instrument: {BCAM}
+metadata: {set imid 3686}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00700000:1}
+	daq_mux_socket {8}
+	daq_device_element {1}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00900000:3}
+	daq_source_mux_socket {3}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BSD_AEM_06_08_C2}
+instrument: {BCAM}
+metadata: {set imid 3688}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00700000:2}
+	daq_mux_socket {2}
+	daq_device_element {1}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00900000:4}
+	daq_source_mux_socket {4}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BSD_AEM_06_08_C3}
+instrument: {BCAM}
+metadata: {set imid 3690}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00700000:2}
+	daq_mux_socket {9}
+	daq_device_element {1}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00900000:5}
+	daq_source_mux_socket {4}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {DRIVER_AEM_07_OFF}
+metadata: {set imid -10027}   
+instrument: {Diagnostic}
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00700000:1}
+	daq_actions {off}
+	daq_psc {0}
+end.
+
+acquire:
+name: {BRD_AEM_06_R2_R3}
+instrument: {BCAM}
+metadata: {set imid 9267}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00800000:1}
+	daq_mux_socket {2}
+	daq_device_element {2}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00800000:2}
+	daq_source_mux_socket {9}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BRD_AEM_06_R3_R2}
+instrument: {BCAM}
+metadata: {set imid 9269}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00800000:2}
+	daq_mux_socket {9}
+	daq_device_element {1}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00800000:1}
+	daq_source_mux_socket {2}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BSD_AEM_06_07_C4}
+instrument: {BCAM}
+metadata: {set imid 3682}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00800000:1}
+	daq_mux_socket {3}
+	daq_device_element {1}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00800000:6}
+	daq_source_mux_socket {4}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BSD_AEM_06_07_C5}
+instrument: {BCAM}
+metadata: {set imid 3684}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00800000:2}
+	daq_mux_socket {5}
+	daq_device_element {1}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00800000:7}
+	daq_source_mux_socket {4}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BSD_AEM_06_08_C4}
+instrument: {BCAM}
+metadata: {set imid 3692}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00800000:1}
+	daq_mux_socket {3}
+	daq_device_element {1}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00900000:6}
+	daq_source_mux_socket {4}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BSD_AEM_06_08_C5}
+instrument: {BCAM}
+metadata: {set imid 3694}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00800000:2}
+	daq_mux_socket {5}
+	daq_device_element {1}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00900000:7}
+	daq_source_mux_socket {4}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BSD_AEM_08_07_C1}
+instrument: {BCAM}
+metadata: {set imid 3696}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00900000:1}
+	daq_mux_socket {7}
+	daq_device_element {1}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00800000:3}
+	daq_source_mux_socket {3}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BSD_AEM_08_07_C2}
+instrument: {BCAM}
+metadata: {set imid 3698}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00900000:2}
+	daq_mux_socket {1}
+	daq_device_element {1}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00800000:4}
+	daq_source_mux_socket {4}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BSD_AEM_08_07_C3}
+instrument: {BCAM}
+metadata: {set imid 3700}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00900000:2}
+	daq_mux_socket {8}
+	daq_device_element {1}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00800000:5}
+	daq_source_mux_socket {4}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {DRIVER_AEM_10_ON}
+metadata: {set imid -10010}   
+instrument: {Diagnostic}
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00A00000:1}
+	daq_actions {off 500 on 500 sleepall 500 sleepall}
+	daq_psc {1}
+	max_p15_mA {124}
+	max_p5_mA {181}
+	max_n15_mA {99}
+end.
+
+acquire:
+name: {BAZ_AEM_06_08_C4}
+instrument: {BCAM}
+metadata: {set imid 3172}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00800000:1}
+	daq_mux_socket {3}
+	daq_device_element {2}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00A00000:1}
+	daq_source_mux_socket {8}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BAZ_AEM_06_08_C5}
+instrument: {BCAM}
+metadata: {set imid 3174}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00800000:2}
+	daq_mux_socket {5}
+	daq_device_element {2}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00A00000:2}
+	daq_source_mux_socket {4}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BAZ_AEM_08_06_C4}
+instrument: {BCAM}
+metadata: {set imid 3182}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00A00000:1}
+	daq_mux_socket {8}
+	daq_device_element {2}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00800000:1}
+	daq_source_mux_socket {3}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BAZ_AEM_08_06_C5}
+instrument: {BCAM}
+metadata: {set imid 3184}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00A00000:2}
+	daq_mux_socket {4}
+	daq_device_element {2}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00800000:2}
+	daq_source_mux_socket {5}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BSD_AEM_08_07_C4}
+instrument: {BCAM}
+metadata: {set imid 3702}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00A00000:1}
+	daq_mux_socket {8}
+	daq_device_element {1}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00800000:6}
+	daq_source_mux_socket {4}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BSD_AEM_08_07_C5}
+instrument: {BCAM}
+metadata: {set imid 3704}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00A00000:2}
+	daq_mux_socket {4}
+	daq_device_element {1}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00800000:7}
+	daq_source_mux_socket {4}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {DRIVER_AEM_08_OFF}
+metadata: {set imid -10028}   
+instrument: {Diagnostic}
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00800000:1}
+	daq_actions {off}
+	daq_psc {0}
+end.
+
+acquire:
+name: {BSD_AEM_08_08_C2}
+instrument: {BCAM}
+metadata: {set imid 3708}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00900000:2}
+	daq_mux_socket {1}
+	daq_device_element {1}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00900000:4}
+	daq_source_mux_socket {4}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BSD_AEM_08_08_C3}
+instrument: {BCAM}
+metadata: {set imid 3710}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00900000:2}
+	daq_mux_socket {8}
+	daq_device_element {1}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00900000:5}
+	daq_source_mux_socket {4}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BRD_AEM_08_R1_R2}
+instrument: {BCAM}
+metadata: {set imid 9271}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00900000:1}
+	daq_mux_socket {4}
+	daq_device_element {2}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00A00000:1}
+	daq_source_mux_socket {2}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BRD_AEM_08_R2_R1}
+instrument: {BCAM}
+metadata: {set imid 9273}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00A00000:1}
+	daq_mux_socket {2}
+	daq_device_element {1}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00900000:1}
+	daq_source_mux_socket {4}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BSD_AEM_08_08_C4}
+instrument: {BCAM}
+metadata: {set imid 3712}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00A00000:1}
+	daq_mux_socket {8}
+	daq_device_element {1}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00900000:6}
+	daq_source_mux_socket {4}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BSD_AEM_08_08_C5}
+instrument: {BCAM}
+metadata: {set imid 3714}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00A00000:2}
+	daq_mux_socket {4}
+	daq_device_element {1}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00900000:7}
+	daq_source_mux_socket {4}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BSD_AEM_08_09_C1}
+instrument: {BCAM}
+metadata: {set imid 3716}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00900000:1}
+	daq_mux_socket {8}
+	daq_device_element {1}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00A00000:3}
+	daq_source_mux_socket {3}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BSD_AEM_08_09_C2}
+instrument: {BCAM}
+metadata: {set imid 3718}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00900000:2}
+	daq_mux_socket {2}
+	daq_device_element {1}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00A00000:4}
+	daq_source_mux_socket {4}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BSD_AEM_08_09_C3}
+instrument: {BCAM}
+metadata: {set imid 3720}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00900000:2}
+	daq_mux_socket {9}
+	daq_device_element {1}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00A00000:5}
+	daq_source_mux_socket {4}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {DRIVER_AEM_11_ON}
+metadata: {set imid -10011}   
+instrument: {Diagnostic}
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00B00000:1}
+	daq_actions {off 500 on 500 sleepall 500 sleepall}
+	daq_psc {1}
+	max_p15_mA {108}
+	max_p5_mA {157}
+	max_n15_mA {86}
+end.
+
+acquire:
+name: {BAZ_AEM_08_10_C1}
+instrument: {BCAM}
+metadata: {set imid 3186}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00900000:1}
+	daq_mux_socket {8}
+	daq_device_element {2}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00B00000:1}
+	daq_source_mux_socket {7}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BAZ_AEM_08_10_C2}
+instrument: {BCAM}
+metadata: {set imid 3188}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00900000:2}
+	daq_mux_socket {2}
+	daq_device_element {2}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00B00000:2}
+	daq_source_mux_socket {1}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BAZ_AEM_08_10_C3}
+instrument: {BCAM}
+metadata: {set imid 3190}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00900000:2}
+	daq_mux_socket {9}
+	daq_device_element {2}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00B00000:2}
+	daq_source_mux_socket {8}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BAZ_AEM_10_08_C1}
+instrument: {BCAM}
+metadata: {set imid 3786}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00B00000:1}
+	daq_mux_socket {7}
+	daq_device_element {2}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00900000:1}
+	daq_source_mux_socket {8}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BAZ_AEM_10_08_C2}
+instrument: {BCAM}
+metadata: {set imid 3788}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00B00000:2}
+	daq_mux_socket {1}
+	daq_device_element {2}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00900000:2}
+	daq_source_mux_socket {2}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BAZ_AEM_10_08_C3}
+instrument: {BCAM}
+metadata: {set imid 3790}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00B00000:2}
+	daq_mux_socket {8}
+	daq_device_element {2}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00900000:2}
+	daq_source_mux_socket {9}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BSD_AEM_08_10_C1}
+instrument: {BCAM}
+metadata: {set imid 3726}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00900000:1}
+	daq_mux_socket {8}
+	daq_device_element {1}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00B00000:3}
+	daq_source_mux_socket {3}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BSD_AEM_08_10_C3}
+instrument: {BCAM}
+metadata: {set imid 3730}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00900000:2}
+	daq_mux_socket {9}
+	daq_device_element {1}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00B00000:5}
+	daq_source_mux_socket {4}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {DRIVER_AEM_19_ON}
+metadata: {set imid -10019}   
+instrument: {Diagnostic}
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00480000:1}
+	daq_actions {off 500 on 500 sleepall 500 sleepall}
+	daq_psc {1}
+	max_p15_mA {41}
+	max_p5_mA {39}
+	max_n15_mA {27}
+end.
+
+acquire:
+name: {BSD_AEM_08_10_C2}
+instrument: {BCAM}
+metadata: {set imid 3728}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00900000:2}
+	daq_mux_socket {2}
+	daq_device_element {1}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00480000:4}
+	daq_source_mux_socket {4}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {DRIVER_AEM_09_OFF}
+metadata: {set imid -10029}   
+instrument: {Diagnostic}
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00900000:1}
+	daq_actions {off}
+	daq_psc {0}
+end.
+
+acquire:
+name: {BRD_AEM_08_R2_R3}
+instrument: {BCAM}
+metadata: {set imid 9275}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00A00000:1}
+	daq_mux_socket {2}
+	daq_device_element {2}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00A00000:2}
+	daq_source_mux_socket {9}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BRD_AEM_08_R3_R2}
+instrument: {BCAM}
+metadata: {set imid 9277}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00A00000:2}
+	daq_mux_socket {9}
+	daq_device_element {1}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00A00000:1}
+	daq_source_mux_socket {2}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BSD_AEM_08_09_C4}
+instrument: {BCAM}
+metadata: {set imid 3722}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00A00000:1}
+	daq_mux_socket {3}
+	daq_device_element {1}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00A00000:6}
+	daq_source_mux_socket {4}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BSD_AEM_08_09_C5}
+instrument: {BCAM}
+metadata: {set imid 3724}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00A00000:2}
+	daq_mux_socket {5}
+	daq_device_element {1}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00A00000:7}
+	daq_source_mux_socket {4}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BSD_AEM_08_10_C4}
+instrument: {BCAM}
+metadata: {set imid 3732}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00A00000:1}
+	daq_mux_socket {3}
+	daq_device_element {1}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00B00000:6}
+	daq_source_mux_socket {4}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BSD_AEM_08_10_C5}
+instrument: {BCAM}
+metadata: {set imid 3734}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00A00000:2}
+	daq_mux_socket {5}
+	daq_device_element {1}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00B00000:7}
+	daq_source_mux_socket {4}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BSD_AEM_10_09_C1}
+instrument: {BCAM}
+metadata: {set imid 3736}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00B00000:1}
+	daq_mux_socket {7}
+	daq_device_element {1}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00A00000:3}
+	daq_source_mux_socket {3}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BSD_AEM_10_09_C2}
+instrument: {BCAM}
+metadata: {set imid 3738}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00B00000:2}
+	daq_mux_socket {1}
+	daq_device_element {1}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00A00000:4}
+	daq_source_mux_socket {4}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BSD_AEM_10_09_C3}
+instrument: {BCAM}
+metadata: {set imid 3740}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00B00000:2}
+	daq_mux_socket {8}
+	daq_device_element {1}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00A00000:5}
+	daq_source_mux_socket {4}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {DRIVER_AEM_12_ON}
+metadata: {set imid -10012}   
+instrument: {Diagnostic}
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00C00000:1}
+	daq_actions {off 500 on 500 sleepall 500 sleepall}
+	daq_psc {1}
+	max_p15_mA {123}
+	max_p5_mA {180}
+	max_n15_mA {98}
+end.
+
+acquire:
+name: {BAZ_AEM_08_10_C4}
+instrument: {BCAM}
+metadata: {set imid 3192}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00A00000:1}
+	daq_mux_socket {3}
+	daq_device_element {2}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00C00000:1}
+	daq_source_mux_socket {8}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BAZ_AEM_08_10_C5}
+instrument: {BCAM}
+metadata: {set imid 3194}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00A00000:2}
+	daq_mux_socket {5}
+	daq_device_element {2}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00C00000:2}
+	daq_source_mux_socket {4}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BAZ_AEM_10_08_C4}
+instrument: {BCAM}
+metadata: {set imid 3792}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00C00000:1}
+	daq_mux_socket {8}
+	daq_device_element {2}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00A00000:1}
+	daq_source_mux_socket {3}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BAZ_AEM_10_08_C5}
+instrument: {BCAM}
+metadata: {set imid 3794}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00C00000:2}
+	daq_mux_socket {4}
+	daq_device_element {2}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00A00000:2}
+	daq_source_mux_socket {5}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BSD_AEM_10_09_C4}
+instrument: {BCAM}
+metadata: {set imid 3742}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00C00000:1}
+	daq_mux_socket {8}
+	daq_device_element {1}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00A00000:6}
+	daq_source_mux_socket {4}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BSD_AEM_10_09_C5}
+instrument: {BCAM}
+metadata: {set imid 3744}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00C00000:2}
+	daq_mux_socket {4}
+	daq_device_element {1}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00A00000:7}
+	daq_source_mux_socket {4}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {DRIVER_AEM_10_OFF}
+metadata: {set imid -10030}   
+instrument: {Diagnostic}
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00A00000:1}
+	daq_actions {off}
+	daq_psc {0}
+end.
+
+acquire:
+name: {BSD_AEM_10_10_C3}
+instrument: {BCAM}
+metadata: {set imid 3750}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00B00000:2}
+	daq_mux_socket {8}
+	daq_device_element {1}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00B00000:5}
+	daq_source_mux_socket {4}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BRD_AEM_10_R1_R2}
+instrument: {BCAM}
+metadata: {set imid 9279}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00B00000:1}
+	daq_mux_socket {4}
+	daq_device_element {2}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00C00000:1}
+	daq_source_mux_socket {2}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BRD_AEM_10_R2_R1}
+instrument: {BCAM}
+metadata: {set imid 9281}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00C00000:1}
+	daq_mux_socket {2}
+	daq_device_element {1}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00B00000:1}
+	daq_source_mux_socket {4}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BSD_AEM_10_10_C4}
+instrument: {BCAM}
+metadata: {set imid 3752}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00C00000:1}
+	daq_mux_socket {8}
+	daq_device_element {1}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00B00000:6}
+	daq_source_mux_socket {4}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BSD_AEM_10_10_C5}
+instrument: {BCAM}
+metadata: {set imid 3754}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00C00000:2}
+	daq_mux_socket {4}
+	daq_device_element {1}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00B00000:7}
+	daq_source_mux_socket {4}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BSD_AEM_10_11_C1}
+instrument: {BCAM}
+metadata: {set imid 3756}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00B00000:1}
+	daq_mux_socket {8}
+	daq_device_element {1}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00C00000:3}
+	daq_source_mux_socket {3}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BSD_AEM_10_11_C2}
+instrument: {BCAM}
+metadata: {set imid 3758}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00B00000:2}
+	daq_mux_socket {2}
+	daq_device_element {1}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00C00000:4}
+	daq_source_mux_socket {4}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BSD_AEM_10_11_C3}
+instrument: {BCAM}
+metadata: {set imid 3760}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00B00000:2}
+	daq_mux_socket {9}
+	daq_device_element {1}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00C00000:5}
+	daq_source_mux_socket {4}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {DRIVER_AEM_13_ON}
+metadata: {set imid -10013}   
+instrument: {Diagnostic}
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00D00000:1}
+	daq_actions {off 500 on 500 sleepall 500 sleepall}
+	daq_psc {1}
+	max_p15_mA {124}
+	max_p5_mA {180}
+	max_n15_mA {99}
+end.
+
+acquire:
+name: {BAZ_AEM_10_12_C1}
+instrument: {BCAM}
+metadata: {set imid 3796}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00B00000:1}
+	daq_mux_socket {8}
+	daq_device_element {2}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00D00000:1}
+	daq_source_mux_socket {7}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BAZ_AEM_10_12_C2}
+instrument: {BCAM}
+metadata: {set imid 3798}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00B00000:2}
+	daq_mux_socket {2}
+	daq_device_element {2}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00D00000:2}
+	daq_source_mux_socket {1}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BAZ_AEM_10_12_C3}
+instrument: {BCAM}
+metadata: {set imid 3800}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00B00000:2}
+	daq_mux_socket {9}
+	daq_device_element {2}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00D00000:2}
+	daq_source_mux_socket {8}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BAZ_AEM_12_10_C1}
+instrument: {BCAM}
+metadata: {set imid 3806}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00D00000:1}
+	daq_mux_socket {7}
+	daq_device_element {2}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00B00000:1}
+	daq_source_mux_socket {8}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BAZ_AEM_12_10_C2}
+instrument: {BCAM}
+metadata: {set imid 3808}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00D00000:2}
+	daq_mux_socket {1}
+	daq_device_element {2}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00B00000:2}
+	daq_source_mux_socket {2}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BAZ_AEM_12_10_C3}
+instrument: {BCAM}
+metadata: {set imid 3810}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00D00000:2}
+	daq_mux_socket {8}
+	daq_device_element {2}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00B00000:2}
+	daq_source_mux_socket {9}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BSD_AEM_10_12_C1}
+instrument: {BCAM}
+metadata: {set imid 3766}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00B00000:1}
+	daq_mux_socket {8}
+	daq_device_element {1}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00D00000:3}
+	daq_source_mux_socket {3}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BSD_AEM_10_12_C2}
+instrument: {BCAM}
+metadata: {set imid 3768}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00B00000:2}
+	daq_mux_socket {2}
+	daq_device_element {1}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00D00000:4}
+	daq_source_mux_socket {4}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BSD_AEM_10_12_C3}
+instrument: {BCAM}
+metadata: {set imid 3770}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00B00000:2}
+	daq_mux_socket {9}
+	daq_device_element {1}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00D00000:5}
+	daq_source_mux_socket {4}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BSD_AEM_10_10_C2}
+instrument: {BCAM}
+metadata: {set imid 3748}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00B00000:2}
+	daq_mux_socket {1}
+	daq_device_element {1}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00480000:4}
+	daq_source_mux_socket {4}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {DRIVER_AEM_11_OFF}
+metadata: {set imid -10031}   
+instrument: {Diagnostic}
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00B00000:1}
+	daq_actions {off}
+	daq_psc {0}
+end.
+
+acquire:
+name: {DRIVER_AEM_19_OFF}
+metadata: {set imid -10039}   
+instrument: {Diagnostic}
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00480000:1}
+	daq_actions {off}
+	daq_psc {0}
+end.
+
+acquire:
+name: {BRD_AEM_10_R2_R3}
+instrument: {BCAM}
+metadata: {set imid 9283}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00C00000:1}
+	daq_mux_socket {2}
+	daq_device_element {2}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00C00000:2}
+	daq_source_mux_socket {9}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BRD_AEM_10_R3_R2}
+instrument: {BCAM}
+metadata: {set imid 9285}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00C00000:2}
+	daq_mux_socket {9}
+	daq_device_element {1}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00C00000:1}
+	daq_source_mux_socket {2}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BSD_AEM_10_11_C4}
+instrument: {BCAM}
+metadata: {set imid 3762}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00C00000:1}
+	daq_mux_socket {3}
+	daq_device_element {1}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00C00000:6}
+	daq_source_mux_socket {4}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BSD_AEM_10_11_C5}
+instrument: {BCAM}
+metadata: {set imid 3764}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00C00000:2}
+	daq_mux_socket {5}
+	daq_device_element {1}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00C00000:7}
+	daq_source_mux_socket {4}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BSD_AEM_10_12_C4}
+instrument: {BCAM}
+metadata: {set imid 3772}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00C00000:1}
+	daq_mux_socket {3}
+	daq_device_element {1}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00D00000:6}
+	daq_source_mux_socket {4}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BSD_AEM_10_12_C5}
+instrument: {BCAM}
+metadata: {set imid 3774}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00C00000:2}
+	daq_mux_socket {5}
+	daq_device_element {1}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00D00000:7}
+	daq_source_mux_socket {4}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BSD_AEM_12_11_C1}
+instrument: {BCAM}
+metadata: {set imid 3776}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00D00000:1}
+	daq_mux_socket {7}
+	daq_device_element {1}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00C00000:3}
+	daq_source_mux_socket {3}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BSD_AEM_12_11_C2}
+instrument: {BCAM}
+metadata: {set imid 3778}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00D00000:2}
+	daq_mux_socket {1}
+	daq_device_element {1}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00C00000:4}
+	daq_source_mux_socket {4}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BSD_AEM_12_11_C3}
+instrument: {BCAM}
+metadata: {set imid 3780}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00D00000:2}
+	daq_mux_socket {8}
+	daq_device_element {1}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00C00000:5}
+	daq_source_mux_socket {4}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {DRIVER_AEM_14_ON}
+metadata: {set imid -10014}   
+instrument: {Diagnostic}
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00E00000:1}
+	daq_actions {off 500 on 500 sleepall 500 sleepall}
+	daq_psc {1}
+	max_p15_mA {126}
+	max_p5_mA {182}
+	max_n15_mA {100}
+end.
+
+acquire:
+name: {BAZ_AEM_10_12_C4}
+instrument: {BCAM}
+metadata: {set imid 3802}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00C00000:1}
+	daq_mux_socket {3}
+	daq_device_element {2}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00E00000:1}
+	daq_source_mux_socket {8}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BAZ_AEM_10_12_C5}
+instrument: {BCAM}
+metadata: {set imid 3804}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00C00000:2}
+	daq_mux_socket {5}
+	daq_device_element {2}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00E00000:2}
+	daq_source_mux_socket {4}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BAZ_AEM_12_10_C4}
+instrument: {BCAM}
+metadata: {set imid 3812}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00E00000:1}
+	daq_mux_socket {8}
+	daq_device_element {2}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00C00000:1}
+	daq_source_mux_socket {3}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BAZ_AEM_12_10_C5}
+instrument: {BCAM}
+metadata: {set imid 3814}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00E00000:2}
+	daq_mux_socket {4}
+	daq_device_element {2}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00C00000:2}
+	daq_source_mux_socket {5}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BSD_AEM_12_11_C4}
+instrument: {BCAM}
+metadata: {set imid 3782}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00E00000:1}
+	daq_mux_socket {8}
+	daq_device_element {1}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00C00000:6}
+	daq_source_mux_socket {4}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BSD_AEM_12_11_C5}
+instrument: {BCAM}
+metadata: {set imid 3784}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00E00000:2}
+	daq_mux_socket {4}
+	daq_device_element {1}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00C00000:7}
+	daq_source_mux_socket {4}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {DRIVER_AEM_12_OFF}
+metadata: {set imid -10032}   
+instrument: {Diagnostic}
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00C00000:1}
+	daq_actions {off}
+	daq_psc {0}
+end.
+
+acquire:
+name: {BSD_AEM_12_12_C2}
+instrument: {BCAM}
+metadata: {set imid 4460}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00D00000:2}
+	daq_mux_socket {1}
+	daq_device_element {1}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00D00000:4}
+	daq_source_mux_socket {4}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BSD_AEM_12_12_C3}
+instrument: {BCAM}
+metadata: {set imid 4462}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00D00000:2}
+	daq_mux_socket {8}
+	daq_device_element {1}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00D00000:5}
+	daq_source_mux_socket {4}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BRD_AEM_12_R1_R2}
+instrument: {BCAM}
+metadata: {set imid 9287}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00D00000:1}
+	daq_mux_socket {4}
+	daq_device_element {2}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00E00000:1}
+	daq_source_mux_socket {2}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BRD_AEM_12_R2_R1}
+instrument: {BCAM}
+metadata: {set imid 9289}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00E00000:1}
+	daq_mux_socket {2}
+	daq_device_element {1}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00D00000:1}
+	daq_source_mux_socket {4}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BSD_AEM_12_12_C4}
+instrument: {BCAM}
+metadata: {set imid 4464}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00E00000:1}
+	daq_mux_socket {8}
+	daq_device_element {1}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00D00000:6}
+	daq_source_mux_socket {4}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BSD_AEM_12_12_C5}
+instrument: {BCAM}
+metadata: {set imid 4466}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00E00000:2}
+	daq_mux_socket {4}
+	daq_device_element {1}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00D00000:7}
+	daq_source_mux_socket {4}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BSD_AEM_12_13_C1}
+instrument: {BCAM}
+metadata: {set imid 4468}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00D00000:1}
+	daq_mux_socket {8}
+	daq_device_element {1}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00E00000:3}
+	daq_source_mux_socket {3}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BSD_AEM_12_13_C2}
+instrument: {BCAM}
+metadata: {set imid 4470}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00D00000:2}
+	daq_mux_socket {2}
+	daq_device_element {1}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00E00000:4}
+	daq_source_mux_socket {4}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BSD_AEM_12_13_C3}
+instrument: {BCAM}
+metadata: {set imid 4472}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00D00000:2}
+	daq_mux_socket {9}
+	daq_device_element {1}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00E00000:5}
+	daq_source_mux_socket {4}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {DRIVER_AEM_15_ON}
+metadata: {set imid -10015}   
+instrument: {Diagnostic}
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00F00000:1}
+	daq_actions {off 500 on 500 sleepall 500 sleepall}
+	daq_psc {1}
+	max_p15_mA {125}
+	max_p5_mA {179}
+	max_n15_mA {99}
+end.
+
+acquire:
+name: {BAZ_AEM_12_14_C1}
+instrument: {BCAM}
+metadata: {set imid 3816}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00D00000:1}
+	daq_mux_socket {8}
+	daq_device_element {2}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00F00000:1}
+	daq_source_mux_socket {7}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BAZ_AEM_12_14_C2}
+instrument: {BCAM}
+metadata: {set imid 3818}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00D00000:2}
+	daq_mux_socket {2}
+	daq_device_element {2}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00F00000:2}
+	daq_source_mux_socket {1}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BAZ_AEM_12_14_C3}
+instrument: {BCAM}
+metadata: {set imid 3820}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00D00000:2}
+	daq_mux_socket {9}
+	daq_device_element {2}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00F00000:2}
+	daq_source_mux_socket {8}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BAZ_AEM_14_12_C1}
+instrument: {BCAM}
+metadata: {set imid 3826}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00F00000:1}
+	daq_mux_socket {7}
+	daq_device_element {2}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00D00000:1}
+	daq_source_mux_socket {8}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BAZ_AEM_14_12_C2}
+instrument: {BCAM}
+metadata: {set imid 3828}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00F00000:2}
+	daq_mux_socket {1}
+	daq_device_element {2}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00D00000:2}
+	daq_source_mux_socket {2}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BAZ_AEM_14_12_C3}
+instrument: {BCAM}
+metadata: {set imid 3830}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00F00000:2}
+	daq_mux_socket {8}
+	daq_device_element {2}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00D00000:2}
+	daq_source_mux_socket {9}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BSD_AEM_12_14_C1}
+instrument: {BCAM}
+metadata: {set imid 4478}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00D00000:1}
+	daq_mux_socket {8}
+	daq_device_element {1}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00F00000:3}
+	daq_source_mux_socket {3}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BSD_AEM_12_14_C2}
+instrument: {BCAM}
+metadata: {set imid 4480}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00D00000:2}
+	daq_mux_socket {2}
+	daq_device_element {1}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00F00000:4}
+	daq_source_mux_socket {4}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BSD_AEM_12_14_C3}
+instrument: {BCAM}
+metadata: {set imid 4482}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00D00000:2}
+	daq_mux_socket {9}
+	daq_device_element {1}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00F00000:5}
+	daq_source_mux_socket {4}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {DRIVER_AEM_13_OFF}
+metadata: {set imid -10033}   
+instrument: {Diagnostic}
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00D00000:1}
+	daq_actions {off}
+	daq_psc {0}
+end.
+
+acquire:
+name: {BRD_AEM_12_R2_R3}
+instrument: {BCAM}
+metadata: {set imid 9291}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00E00000:1}
+	daq_mux_socket {2}
+	daq_device_element {2}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00E00000:2}
+	daq_source_mux_socket {9}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BRD_AEM_12_R3_R2}
+instrument: {BCAM}
+metadata: {set imid 9293}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00E00000:2}
+	daq_mux_socket {9}
+	daq_device_element {1}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00E00000:1}
+	daq_source_mux_socket {2}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BSD_AEM_12_13_C4}
+instrument: {BCAM}
+metadata: {set imid 4474}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00E00000:1}
+	daq_mux_socket {3}
+	daq_device_element {1}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00E00000:6}
+	daq_source_mux_socket {4}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BSD_AEM_12_13_C5}
+instrument: {BCAM}
+metadata: {set imid 4476}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00E00000:2}
+	daq_mux_socket {5}
+	daq_device_element {1}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00E00000:7}
+	daq_source_mux_socket {4}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BSD_AEM_12_14_C4}
+instrument: {BCAM}
+metadata: {set imid 4484}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00E00000:1}
+	daq_mux_socket {3}
+	daq_device_element {1}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00F00000:6}
+	daq_source_mux_socket {4}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BSD_AEM_12_14_C5}
+instrument: {BCAM}
+metadata: {set imid 4486}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00E00000:2}
+	daq_mux_socket {5}
+	daq_device_element {1}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00F00000:7}
+	daq_source_mux_socket {4}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BSD_AEM_14_13_C1}
+instrument: {BCAM}
+metadata: {set imid 4488}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00F00000:1}
+	daq_mux_socket {7}
+	daq_device_element {1}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00E00000:3}
+	daq_source_mux_socket {3}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {76}
+	peak_max {96}
+end.
+
+acquire:
+name: {BSD_AEM_14_13_C2}
+instrument: {BCAM}
+metadata: {set imid 4490}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00F00000:2}
+	daq_mux_socket {1}
+	daq_device_element {1}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00E00000:4}
+	daq_source_mux_socket {4}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BSD_AEM_14_13_C3}
+instrument: {BCAM}
+metadata: {set imid 4492}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00F00000:2}
+	daq_mux_socket {8}
+	daq_device_element {1}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00E00000:5}
+	daq_source_mux_socket {4}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {DRIVER_AEM_16_ON}
+metadata: {set imid -10016}   
+instrument: {Diagnostic}
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00180000:1}
+	daq_actions {off 500 on 500 off 500 on 500 sleepall 500 sleepall}
+	daq_psc {1}
+	max_p15_mA {123}
+	max_p5_mA {193}
+	max_n15_mA {99}
+end.
+
+acquire:
+name: {BAZ_AEM_12_14_C4}
+instrument: {BCAM}
+metadata: {set imid 3822}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00E00000:1}
+	daq_mux_socket {3}
+	daq_device_element {2}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00180000:1}
+	daq_source_mux_socket {8}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BAZ_AEM_12_14_C5}
+instrument: {BCAM}
+metadata: {set imid 3824}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00E00000:2}
+	daq_mux_socket {5}
+	daq_device_element {2}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00180000:2}
+	daq_source_mux_socket {4}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BAZ_AEM_14_12_C4}
+instrument: {BCAM}
+metadata: {set imid 3832}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00180000:1}
+	daq_mux_socket {8}
+	daq_device_element {2}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00E00000:1}
+	daq_source_mux_socket {3}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BAZ_AEM_14_12_C5}
+instrument: {BCAM}
+metadata: {set imid 3834}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00180000:2}
+	daq_mux_socket {4}
+	daq_device_element {2}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00E00000:2}
+	daq_source_mux_socket {5}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BSD_AEM_14_13_C4}
+instrument: {BCAM}
+metadata: {set imid 4494}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00180000:1}
+	daq_mux_socket {8}
+	daq_device_element {1}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00E00000:6}
+	daq_source_mux_socket {4}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BSD_AEM_14_13_C5}
+instrument: {BCAM}
+metadata: {set imid 4496}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00180000:2}
+	daq_mux_socket {4}
+	daq_device_element {1}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00E00000:7}
+	daq_source_mux_socket {4}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {DRIVER_AEM_14_OFF}
+metadata: {set imid -10034}   
+instrument: {Diagnostic}
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00E00000:1}
+	daq_actions {off}
+	daq_psc {0}
+end.
+
+acquire:
+name: {DRIVER_AEM_01_ON}
+metadata: {set imid -10001}   
+instrument: {Diagnostic}
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00100000:1}
+	daq_actions {off 500 on 500 sleepall 500 sleepall}
+	daq_psc {1}
+	max_p15_mA {125}
+	max_p5_mA {177}
+	max_n15_mA {100}
+end.
+
+acquire:
+name: {BAZ_AEM_14_16_C1}
+instrument: {BCAM}
+metadata: {set imid 3836}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00F00000:1}
+	daq_mux_socket {8}
+	daq_device_element {2}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00100000:1}
+	daq_source_mux_socket {7}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BAZ_AEM_14_16_C2}
+instrument: {BCAM}
+metadata: {set imid 3838}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00F00000:2}
+	daq_mux_socket {2}
+	daq_device_element {2}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00100000:2}
+	daq_source_mux_socket {1}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BAZ_AEM_14_16_C3}
+instrument: {BCAM}
+metadata: {set imid 3840}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00F00000:2}
+	daq_mux_socket {9}
+	daq_device_element {2}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00100000:2}
+	daq_source_mux_socket {8}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BAZ_AEM_16_14_C1}
+instrument: {BCAM}
+metadata: {set imid 3856}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00100000:1}
+	daq_mux_socket {7}
+	daq_device_element {2}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00F00000:1}
+	daq_source_mux_socket {8}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {69}
+	peak_max {87}
+end.
+
+acquire:
+name: {BAZ_AEM_16_14_C2}
+instrument: {BCAM}
+metadata: {set imid 3858}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00100000:2}
+	daq_mux_socket {1}
+	daq_device_element {2}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00F00000:2}
+	daq_source_mux_socket {2}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BAZ_AEM_16_14_C3}
+instrument: {BCAM}
+metadata: {set imid 3860}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00100000:2}
+	daq_mux_socket {8}
+	daq_device_element {2}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00F00000:2}
+	daq_source_mux_socket {9}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BSD_AEM_14_16_C1}
+instrument: {BCAM}
+metadata: {set imid 4518}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00F00000:1}
+	daq_mux_socket {8}
+	daq_device_element {1}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00100000:3}
+	daq_source_mux_socket {3}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BSD_AEM_14_16_C2}
+instrument: {BCAM}
+metadata: {set imid 4520}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00F00000:2}
+	daq_mux_socket {2}
+	daq_device_element {1}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00100000:4}
+	daq_source_mux_socket {4}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BSD_AEM_14_16_C3}
+instrument: {BCAM}
+metadata: {set imid 4522}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00F00000:2}
+	daq_mux_socket {9}
+	daq_device_element {1}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00100000:5}
+	daq_source_mux_socket {4}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BSD_AEM_14_14_C2}
+instrument: {BCAM}
+metadata: {set imid 4500}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00F00000:2}
+	daq_mux_socket {1}
+	daq_device_element {1}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00F00000:4}
+	daq_source_mux_socket {4}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BSD_AEM_14_14_C3}
+instrument: {BCAM}
+metadata: {set imid 4502}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00F00000:2}
+	daq_mux_socket {8}
+	daq_device_element {1}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00F00000:5}
+	daq_source_mux_socket {4}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BRD_AEM_14_R1_R2}
+instrument: {BCAM}
+metadata: {set imid 9295}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00F00000:1}
+	daq_mux_socket {4}
+	daq_device_element {2}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00180000:1}
+	daq_source_mux_socket {2}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BRD_AEM_14_R2_R1}
+instrument: {BCAM}
+metadata: {set imid 9297}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00180000:1}
+	daq_mux_socket {2}
+	daq_device_element {1}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00F00000:1}
+	daq_source_mux_socket {4}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BSD_AEM_14_14_C4}
+instrument: {BCAM}
+metadata: {set imid 4504}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00180000:1}
+	daq_mux_socket {8}
+	daq_device_element {1}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00F00000:6}
+	daq_source_mux_socket {4}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BSD_AEM_14_14_C5}
+instrument: {BCAM}
+metadata: {set imid 4506}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00180000:2}
+	daq_mux_socket {4}
+	daq_device_element {1}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00F00000:7}
+	daq_source_mux_socket {4}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BSD_AEM_14_15_C1}
+instrument: {BCAM}
+metadata: {set imid 4508}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00F00000:1}
+	daq_mux_socket {8}
+	daq_device_element {1}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00180000:3}
+	daq_source_mux_socket {3}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BSD_AEM_14_15_C2}
+instrument: {BCAM}
+metadata: {set imid 4510}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00F00000:2}
+	daq_mux_socket {2}
+	daq_device_element {1}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00180000:4}
+	daq_source_mux_socket {4}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BSD_AEM_14_15_C3}
+instrument: {BCAM}
+metadata: {set imid 4512}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00F00000:2}
+	daq_mux_socket {9}
+	daq_device_element {1}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00180000:5}
+	daq_source_mux_socket {4}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {DRIVER_AEM_15_OFF}
+metadata: {set imid -10035}   
+instrument: {Diagnostic}
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00F00000:1}
+	daq_actions {off}
+	daq_psc {0}
+end.
+
+acquire:
+name: {BSD_AEM_14_16_C4}
+instrument: {BCAM}
+metadata: {set imid 4524}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00180000:1}
+	daq_mux_socket {3}
+	daq_device_element {1}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00100000:6}
+	daq_source_mux_socket {4}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BSD_AEM_14_16_C5}
+instrument: {BCAM}
+metadata: {set imid 4526}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00180000:2}
+	daq_mux_socket {5}
+	daq_device_element {1}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00100000:7}
+	daq_source_mux_socket {4}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BSD_AEM_16_15_C1}
+instrument: {BCAM}
+metadata: {set imid 4548}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00100000:1}
+	daq_mux_socket {7}
+	daq_device_element {1}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00180000:3}
+	daq_source_mux_socket {3}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {69}
+	peak_max {87}
+end.
+
+acquire:
+name: {BSD_AEM_16_15_C2}
+instrument: {BCAM}
+metadata: {set imid 4550}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00100000:2}
+	daq_mux_socket {1}
+	daq_device_element {1}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00180000:4}
+	daq_source_mux_socket {4}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {69}
+	peak_max {87}
+end.
+
+acquire:
+name: {BSD_AEM_16_15_C3}
+instrument: {BCAM}
+metadata: {set imid 4552}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00100000:2}
+	daq_mux_socket {8}
+	daq_device_element {1}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00180000:5}
+	daq_source_mux_socket {4}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {DRIVER_AEM_01_OFF}
+metadata: {set imid -10021}   
+instrument: {Diagnostic}
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00100000:1}
+	daq_actions {off}
+	daq_psc {0}
+end.
+
+acquire:
+name: {DRIVER_AEM_02_ON}
+metadata: {set imid -10002}   
+instrument: {Diagnostic}
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00200000:1}
+	daq_actions {off 500 on 500 sleepall 500 sleepall}
+	daq_psc {1}
+	max_p15_mA {125}
+	max_p5_mA {186}
+	max_n15_mA {99}
+end.
+
+acquire:
+name: {BAZ_AEM_14_16_C4}
+instrument: {BCAM}
+metadata: {set imid 3842}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00180000:1}
+	daq_mux_socket {3}
+	daq_device_element {2}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00200000:1}
+	daq_source_mux_socket {8}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BAZ_AEM_14_16_C5}
+instrument: {BCAM}
+metadata: {set imid 3844}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00180000:2}
+	daq_mux_socket {5}
+	daq_device_element {2}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00200000:2}
+	daq_source_mux_socket {4}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BAZ_AEM_16_14_C4}
+instrument: {BCAM}
+metadata: {set imid 3862}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00200000:1}
+	daq_mux_socket {8}
+	daq_device_element {2}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00180000:1}
+	daq_source_mux_socket {3}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BAZ_AEM_16_14_C5}
+instrument: {BCAM}
+metadata: {set imid 3864}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00200000:2}
+	daq_mux_socket {4}
+	daq_device_element {2}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00180000:2}
+	daq_source_mux_socket {5}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BSD_AEM_16_15_C4}
+instrument: {BCAM}
+metadata: {set imid 4554}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00200000:1}
+	daq_mux_socket {8}
+	daq_device_element {1}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00180000:6}
+	daq_source_mux_socket {4}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BSD_AEM_16_15_C5}
+instrument: {BCAM}
+metadata: {set imid 4556}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00200000:2}
+	daq_mux_socket {4}
+	daq_device_element {1}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00180000:7}
+	daq_source_mux_socket {4}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {DRIVER_AEM_02_OFF}
+metadata: {set imid -10022}   
+instrument: {Diagnostic}
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00200000:1}
+	daq_actions {off}
+	daq_psc {0}
+end.
+
+acquire:
+name: {BRD_AEM_14_R2_R3}
+instrument: {BCAM}
+metadata: {set imid 9299}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00180000:1}
+	daq_mux_socket {2}
+	daq_device_element {2}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00180000:2}
+	daq_source_mux_socket {9}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BRD_AEM_14_R3_R2}
+instrument: {BCAM}
+metadata: {set imid 9301}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00180000:2}
+	daq_mux_socket {9}
+	daq_device_element {1}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00180000:1}
+	daq_source_mux_socket {2}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BSD_AEM_14_15_C4}
+instrument: {BCAM}
+metadata: {set imid 4514}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00180000:1}
+	daq_mux_socket {3}
+	daq_device_element {1}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00180000:6}
+	daq_source_mux_socket {4}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {BSD_AEM_14_15_C5}
+instrument: {BCAM}
+metadata: {set imid 4516}   
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00180000:2}
+	daq_mux_socket {5}
+	daq_device_element {1}
+	daq_device_type {2}
+	daq_source_ip_addr {11.0.0.212}
+	daq_source_driver_socket {00180000:7}
+	daq_source_mux_socket {4}
+	daq_source_device_element {7}
+	daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+	daq_image_left {20}
+	daq_image_right {343}
+	daq_image_top {1}
+	daq_image_bottom {243}
+	peak_min {80}
+	peak_max {100}
+end.
+
+acquire:
+name: {DRIVER_AEM_16_OFF}
+metadata: {set imid -10036}   
+instrument: {Diagnostic}
+config:
+	daq_ip_addr {11.0.0.212}
+	daq_driver_socket {00180000:1}
+	daq_actions {off}
+	daq_psc {0}
+end.
+

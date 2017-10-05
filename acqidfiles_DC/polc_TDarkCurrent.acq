@@ -1,0 +1,2360 @@
+##############################################################################
+acquisifier:
+post_processing: {
+	global LWDAQ_Info
+	set LWDAQ_Info(queue_ms) 200
+	LWDAQ_print $info(text) "set delay 200" red
+}
+
+config:
+	cycle_period_seconds 0
+end.
+
+
+##############################################################################
+default:
+instrument: BCAM
+
+default_post_processing: {
+	set experr 0
+	set spoterr 0
+	set pixerr 0
+	set exposure 0
+	set avg 0
+	set std 0
+	set max 0
+	set min 0
+	set pixels_in_spot 0
+	set contrast 0
+	set background 0
+	set background_noise 0
+	set im_id 0
+	set readerr 0
+	set error_code 0
+	set disb 0
+	eval $metadata
+	scan $result "%s %s" dum errnum
+	if { $errnum == "-1" } {
+		LWDAQ_print $info(text) "analysis error" red
+		set readerr -201
+	}
+	if { [regexp {ERROR: *} $result] } {
+		LWDAQ_print $info(text) $result red
+		set readerr -200
+	}
+	if { [lwdaq_image_exists $iconfig(memory_name)] != "" } {
+		set imageok 1
+	} else {
+		set imageok 0
+		set readerr -202
+	}
+	if { $readerr == -201 } {
+		set imageok 0 
+	}
+ 	# Write the BCAM image out to the results directory for the analysis program
+ 	# Want to keep image, regardless that it is not good
+	#if {$imageok == 1 } {
+	set fn [file join [file dirname $config(run_results)] $name\.ccd]
+	LWDAQ_write_image_file $iconfig(memory_name) $fn
+	#}
+
+	if {$readerr == 0 } {
+		set error_code 0
+		set pixels_in_spot 0 
+		set contrast  0 
+		set background 0 
+		set background_noise 0 
+		set charac [lwdaq_image_characteristics $iconfig(memory_name)]
+		scan $charac "%d %d %d %d %f %f %f %f" dum1 dum2 dum3 dum4 avg std max min
+		set exposure $iconfig(daq_flash_seconds)
+		set expo [ expr 1000000*$exposure ] 
+	} 
+	set time [clock seconds]
+	set lwdaqerr 0
+
+	if { $readerr !=0 } {
+		set result "$name -1000 -1000 -1 -1 0 0 0 0 0 0 0 0"
+	}
+
+	set lwerr [LWDAQ_is_error_result "$result"]
+	if { $lwerr} {
+		LWDAQ_print $info(text)  "LWDAQ ERROR" red
+		set result "$name -1000 -1000 -1 -1 0 0 0 0 0 0 0 0"
+	}
+
+	if { $readerr ==0 } {
+		scan $result "%s %f %f %d %d %f %d %f %f %d " dummy x y pix int sns thr x2 y2 pix2
+		# check for too many pixels on
+		set pixerr 0
+		if {$pix > 1000} {
+			set pixerr -400
+		}  
+		# check for too large exposure time 
+		set experr 0
+		if {$expo > 90000} {
+			set experr -100
+		}  
+		if {$x2 == -1.0 || $x2==0 || $pix2 < 5} {
+			LWDAQ_print $info(text) "one spot" blue
+			set spoterr 0 
+	   	} else {
+			LWDAQ_print $info(text) "two spots" red
+			set spoterr 0 
+		}
+	}
+
+	set lwdaqerr [ expr $error_code+$spoterr+$pixerr+$experr+$readerr-40*$lwerr]
+	set error_code $lwdaqerr
+	set im_id $imid
+
+	scan $result "%s %f %f %d %d %f %d" dummy x y pix int sns thr
+	set output [ format "%s %d %7.5f %7.5f %7.5f %d\n#DQMB %s %d px %d in %1.3f se %d th %1.0f ex %1.0f av %1.0f st %1.0f mx %1.0f mn %d ec %d np %1.3f co %1.3f bg %1.3f rn" $name $im_id [ expr $x/1000. ] [ expr $y/1000. ] 0.0 $time $name $pix $int $sns $thr [ expr 1000000*$exposure ] $avg $std $max $min $error_code $pixels_in_spot $contrast $background $background_noise ]        
+	
+	set f [open $config(run_results) a]
+	puts $f $output
+	close $f
+	LWDAQ_print $info(text) $output blue
+	set fn [file join [file dirname $config(run_results)] $name\.ccd]
+
+	if { $imageok == 1 } {
+		set fns [file join [file dirname $config(run_results)] $name]
+	}
+	set result $output
+}
+
+
+config:
+	image_source    daq
+	analysis_enable {1}
+	analysis_threshold {25 # 2}
+	analysis_num_spots {2}
+	daq_source_ip_addr {*}
+	ambient_exposure_seconds {0}
+	intensify {exact}
+	daq_adjust_flash {1}
+	daq_subtract_background {0}
+	peak_min {80}
+	peak_max {100}
+	extended_parameters {0.4 0.8 0}
+	flash_seconds_max {0.1}
+	flash_seconds_reduce {0.8}
+	flash_seconds_step {0.000001}
+	flash_seconds_transition {0.000010}
+	flash_max_tries {60}
+end.
+
+
+default:
+instrument: Rasnik
+
+default_post_processing: {
+	set readerr 0
+	set exposure 0  
+	set avg 0
+	set std 0
+	set max 0
+	set min 0
+	set edges_per_line 0
+	set contrast 0
+	set bright_noise 0
+	set dim_noise 0
+	set sharpness 0
+	set im_id 0
+	set disb 0
+	eval $metadata
+	set im_id $imid
+	set errtype 0
+	set lwerr 0
+	set lwerr [LWDAQ_is_error_result "$result"]
+	if { $lwerr} {
+		LWDAQ_print $info(text) "LWDAQ ERROR" red
+		set errtype -3
+		set readerr -203
+	}
+	
+	scan $result "%s %s" dum errnum
+	if { $errnum == "-1" } {
+		LWDAQ_print $info(text) "analysis error" red
+		set errtype -1
+		set readerr -201
+	}
+
+	if { [regexp {ERROR: *} $result] } {
+		LWDAQ_print $info(text) $result red
+		set errtype -4
+		set readerr -200
+	}
+
+	LWDAQ_print $info(text) $errtype red
+
+	# check for image exists:    1 means exists
+	if { [lwdaq_image_exists $iconfig(memory_name)] != "" } {
+		set imageok 1
+	} else {
+		set imageok 0
+		set readerr -202
+	}
+	if { $readerr == -201 } {
+		set imageok 0 
+	}
+	
+	if { $imageok == 0 } {
+		LWDAQ_print $info(text) "noimage" red
+		LWDAQ_print $info(text) $readerr red
+	}
+	#if { $imageok == 1 } {
+	#Want to keep image even though not okay
+	set fn [file join [file dirname $config(run_results)] $name\.ccd]
+	LWDAQ_write_image_file $iconfig(memory_name) $fn
+	#}
+   set error_code 0
+
+	if { $readerr == 0 } {
+		set charac [lwdaq_image_characteristics $iconfig(memory_name)]
+		scan $charac "%d %d %d %d %f %f %f %f" dum1 dum2 dum3 dum4 avg std max min
+		set exposure $iconfig(daq_flash_seconds)
+	} 
+	set time [clock seconds]
+	
+	if { $readerr !=0 } {
+		LWDAQ_print $info(text) $readerr red
+		LWDAQ_print $info(text) $name red
+		set result "$name -1000 -1000 -1 -1 0 0 0 0 0 0 0 0"
+	}
+
+	set lwdaqerr [expr  $error_code+$readerr]
+	set error_code $lwdaqerr
+	scan $result "%s %f %f %f %f %f %f %f %f %d %d %f %f" dum x y z1 z2 rot err sqs pxs ori refc refx refy
+	set output [ format "%s %d %7.4f %7.4f %8.6f %d\n#DQMR %s %9.6f dm %1.3f ro %1.2f dx %1.0f sq %d or %d rf %1.0f ex %1.0f av %1.0f st %1.0f mx %1.0f mn %d ec %1.3f el %1.3f co %1.3f ln %1.3f dn %1.3f sh" $name  $im_id [ expr $x/1000. ] [ expr $y/1000. ] [ expr 1./(0.5*($z1+$z2)) ] $time $name [ expr 0.5*($z1-$z2) ] $rot $err $sqs $ori $refc [ expr 1000000*$exposure ] $avg $std $max $min $error_code $edges_per_line $contrast $bright_noise $dim_noise $sharpness]
+
+	set f [open $config(run_results) a]
+	puts $f $output
+	close $f
+	LWDAQ_print $info(text) $output blue
+
+	if { $imageok == 1 } {
+		set fns [file join [file dirname $config(run_results)] $name]
+	}
+	set result $output
+}
+
+config:
+	image_source    daq
+	analysis_enable {2}
+	daq_source_ip_addr {*}
+	intensify {exact}
+	daq_adjust_flash {1}
+	daq_subtract_background {0}
+	peak_min {140}
+	peak_max {160}
+	extended_parameters {0.3 0.95}
+	analysis_max_tries {20}
+	flash_seconds_max {0.5}
+	flash_seconds_reduce {0.8}
+	flash_seconds_step {0.000001}
+	flash_seconds_transition {0.000010}
+	flash_max_tries {60}
+end.
+
+
+default:
+instrument: Thermometer
+default_post_processing: {
+	set time [clock seconds]
+	set error_code 0
+	set im_id 0
+	eval $metadata
+	set im_id $imid
+	scan $result "%s %f %f " dum temp tsd	
+	if { $tsd < 0.001 || $tsd > 0.2 } {
+		set error_code -1 
+	}
+ 	if { [regexp {TBA_901_*} $name]} {
+		if { $tsd < 4.00  } {
+			set error_code 2
+		}
+	} 
+
+	set output [ format "%s %d 0 0 %9.3f %9.4f %d %d  " $name $im_id $temp $tsd $error_code $time ]
+	set f [open $config(run_results) a]
+	puts $f $output
+	close $f
+	LWDAQ_print $info(text) $output blue
+	set result $output
+}
+
+config:
+	image_source    "daq"
+	analysis_enable          "2"
+end.
+
+default:
+instrument: Diagnostic
+default_post_processing: {
+	set error_code 0
+	set im_id 0
+	eval $metadata
+	set im_id $imid
+	set time [clock seconds]
+	set ip_addr $iconfig(daq_ip_addr)
+	set driver_sock $iconfig(daq_driver_socket)
+	set retries [expr $iinfo(psc_num_tries)-$iconfig(daq_psc) ]
+	scan $result "%s %d %d %d %d %d %d %f %f %f %f %f %f %f %f" dum0 dum1 dum2 dum3 dum4 dum5 dum6 pos5V pos5C pos15V pos15C neg15V neg15C dum7 dum8
+	set output [ format "%s %d %3.3f %3.3f %3.3f %3.3f %3.3f %3.3f %s %s %d %d" $name $im_id $pos15V $pos15C $pos5V $pos5C $neg15V $neg15C $ip_addr $driver_sock $time $retries ]
+	set result $output
+}
+
+config:
+	psc_max_tries {10}
+end.
+
+acquire:
+name: {DRIVER_CEM_01_ON}
+metadata: {set imid -10041}   
+instrument: {Diagnostic}
+config:
+  daq_ip_addr {11.0.0.211}
+  daq_driver_socket {00100000:1}
+  daq_actions {off 500 on 500 sleepall 500 sleepall}
+  daq_psc {1}
+  max_p15_mA {124}
+  max_p5_mA {181}
+  max_n15_mA {99}
+end.
+
+acquire:
+name: {DRIVER_CEO_01_ON}
+metadata: {set imid -10121}   
+instrument: {Diagnostic}
+config:
+  daq_ip_addr {11.0.0.214}
+  daq_driver_socket {00100000:1}
+  daq_actions {off 500 on 500 sleepall 500 sleepall}
+  daq_psc {1}
+  max_p15_mA {138}
+  max_p5_mA {201}
+  max_n15_mA {111}
+end.
+
+acquire:
+name: {BPL_CEM_CEO_16_R1}
+instrument: {BCAM}
+metadata: {set imid 302}   
+config:
+  daq_ip_addr {11.0.0.211}
+  daq_driver_socket {00100000:1}
+  daq_mux_socket {3}
+  daq_device_element {2}
+  daq_device_type {2}
+  daq_source_ip_addr {11.0.0.214}
+  daq_source_driver_socket {00100000:1}
+  daq_source_mux_socket {2}
+	daq_source_device_element {7}
+  daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+  daq_image_left {20}
+  daq_image_right {343}
+  daq_image_top {1}
+  daq_image_bottom {243}
+  peak_min {80}
+  peak_max {100}
+end.
+
+acquire:
+name: {BPL_CEO_CEM_16_R1}
+instrument: {BCAM}
+metadata: {set imid 9243}   
+config:
+  daq_ip_addr {11.0.0.214}
+  daq_driver_socket {00100000:1}
+  daq_mux_socket {2}
+  daq_device_element {2}
+  daq_device_type {2}
+  daq_source_ip_addr {11.0.0.211}
+  daq_source_driver_socket {00100000:1}
+  daq_source_mux_socket {3}
+	daq_source_device_element {7}
+  daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+  daq_image_left {20}
+  daq_image_right {343}
+  daq_image_top {1}
+  daq_image_bottom {243}
+  peak_min {80}
+  peak_max {100}
+end.
+
+acquire:
+name: {DRIVER_CEM_01_OFF}
+metadata: {set imid -10061}   
+instrument: {Diagnostic}
+config:
+  daq_ip_addr {11.0.0.211}
+  daq_driver_socket {00100000:1}
+  daq_actions {off}
+  daq_psc {0}
+end.
+
+acquire:
+name: {DRIVER_CEM_02_ON}
+metadata: {set imid -10042}   
+instrument: {Diagnostic}
+config:
+  daq_ip_addr {11.0.0.211}
+  daq_driver_socket {00200000:1}
+  daq_actions {off 500 on 500 sleepall 500 sleepall}
+  daq_psc {1}
+  max_p15_mA {207}
+  max_p5_mA {184}
+  max_n15_mA {99}
+end.
+
+acquire:
+name: {DRIVER_CEO_02_ON}
+metadata: {set imid -10122}   
+instrument: {Diagnostic}
+config:
+  daq_ip_addr {11.0.0.214}
+  daq_driver_socket {00200000:1}
+  daq_actions {off 500 on 500 sleepall 500 sleepall}
+  daq_psc {1}
+  max_p15_mA {186}
+  max_p5_mA {207}
+  max_n15_mA {113}
+end.
+
+acquire:
+name: {BPL_CEM_CEO_16_R2}
+instrument: {BCAM}
+metadata: {set imid 9217}   
+config:
+  daq_ip_addr {11.0.0.211}
+  daq_driver_socket {00200000:1}
+  daq_mux_socket {1}
+  daq_device_element {1}
+  daq_device_type {2}
+  daq_source_ip_addr {11.0.0.214}
+  daq_source_driver_socket {00200000:2}
+  daq_source_mux_socket {5}
+	daq_source_device_element {7}
+  daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+  daq_image_left {20}
+  daq_image_right {343}
+  daq_image_top {1}
+  daq_image_bottom {243}
+  peak_min {80}
+  peak_max {100}
+end.
+
+acquire:
+name: {BPL_CEO_CEM_16_R2}
+instrument: {BCAM}
+metadata: {set imid 9245}   
+config:
+  daq_ip_addr {11.0.0.214}
+  daq_driver_socket {00200000:2}
+  daq_mux_socket {5}
+  daq_device_element {2}
+  daq_device_type {2}
+  daq_source_ip_addr {11.0.0.211}
+  daq_source_driver_socket {00200000:1}
+  daq_source_mux_socket {1}
+	daq_source_device_element {7}
+  daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+  daq_image_left {20}
+  daq_image_right {343}
+  daq_image_top {1}
+  daq_image_bottom {243}
+  peak_min {80}
+  peak_max {100}
+end.
+
+acquire:
+name: {DRIVER_CEM_02_OFF}
+metadata: {set imid -10062}   
+instrument: {Diagnostic}
+config:
+  daq_ip_addr {11.0.0.211}
+  daq_driver_socket {00200000:1}
+  daq_actions {off}
+  daq_psc {0}
+end.
+
+acquire:
+name: {DRIVER_CEM_03_ON}
+metadata: {set imid -10043}   
+instrument: {Diagnostic}
+config:
+  daq_ip_addr {11.0.0.211}
+  daq_driver_socket {00300000:1}
+  daq_actions {off 500 on 500 sleepall 500 sleepall}
+  daq_psc {1}
+  max_p15_mA {125}
+  max_p5_mA {180}
+  max_n15_mA {98}
+end.
+
+acquire:
+name: {DRIVER_CEO_03_ON}
+metadata: {set imid -10123}   
+instrument: {Diagnostic}
+config:
+  daq_ip_addr {11.0.0.214}
+  daq_driver_socket {00300000:1}
+  daq_actions {off 500 on 500 sleepall 500 sleepall}
+  daq_psc {1}
+  max_p15_mA {138}
+  max_p5_mA {191}
+  max_n15_mA {111}
+end.
+
+acquire:
+name: {BPL_CEM_CEO_02_R1}
+instrument: {BCAM}
+metadata: {set imid 1065}   
+config:
+  daq_ip_addr {11.0.0.211}
+  daq_driver_socket {00300000:1}
+  daq_mux_socket {3}
+  daq_device_element {2}
+  daq_device_type {2}
+  daq_source_ip_addr {11.0.0.214}
+  daq_source_driver_socket {00300000:1}
+  daq_source_mux_socket {2}
+	daq_source_device_element {7}
+  daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+  daq_image_left {20}
+  daq_image_right {343}
+  daq_image_top {1}
+  daq_image_bottom {243}
+  peak_min {80}
+  peak_max {100}
+end.
+
+acquire:
+name: {BPL_CEO_CEM_02_R1}
+instrument: {BCAM}
+metadata: {set imid 9219}   
+config:
+  daq_ip_addr {11.0.0.214}
+  daq_driver_socket {00300000:1}
+  daq_mux_socket {2}
+  daq_device_element {2}
+  daq_device_type {2}
+  daq_source_ip_addr {11.0.0.211}
+  daq_source_driver_socket {00300000:1}
+  daq_source_mux_socket {3}
+	daq_source_device_element {7}
+  daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+  daq_image_left {20}
+  daq_image_right {343}
+  daq_image_top {1}
+  daq_image_bottom {243}
+  peak_min {80}
+  peak_max {100}
+end.
+
+acquire:
+name: {DRIVER_CEM_03_OFF}
+metadata: {set imid -10063}   
+instrument: {Diagnostic}
+config:
+  daq_ip_addr {11.0.0.211}
+  daq_driver_socket {00300000:1}
+  daq_actions {off}
+  daq_psc {0}
+end.
+
+acquire:
+name: {DRIVER_CEM_04_ON}
+metadata: {set imid -10044}   
+instrument: {Diagnostic}
+config:
+  daq_ip_addr {11.0.0.211}
+  daq_driver_socket {00400000:1}
+  daq_actions {off 500 on 500 sleepall 500 sleepall}
+  daq_psc {1}
+  max_p15_mA {124}
+  max_p5_mA {190}
+  max_n15_mA {98}
+end.
+
+acquire:
+name: {DRIVER_CEO_04_ON}
+metadata: {set imid -10124}   
+instrument: {Diagnostic}
+config:
+  daq_ip_addr {11.0.0.214}
+  daq_driver_socket {00400000:1}
+  daq_actions {off 500 on 500 sleepall 500 sleepall}
+  daq_psc {1}
+  max_p15_mA {140}
+  max_p5_mA {225}
+  max_n15_mA {112}
+end.
+
+acquire:
+name: {BPL_CEM_CEO_02_R2}
+instrument: {BCAM}
+metadata: {set imid 1158}   
+config:
+  daq_ip_addr {11.0.0.211}
+  daq_driver_socket {00400000:1}
+  daq_mux_socket {1}
+  daq_device_element {1}
+  daq_device_type {2}
+  daq_source_ip_addr {11.0.0.214}
+  daq_source_driver_socket {00400000:2}
+  daq_source_mux_socket {5}
+	daq_source_device_element {7}
+  daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+  daq_image_left {20}
+  daq_image_right {343}
+  daq_image_top {1}
+  daq_image_bottom {243}
+  peak_min {80}
+  peak_max {100}
+end.
+
+acquire:
+name: {BPL_CEO_CEM_02_R2}
+instrument: {BCAM}
+metadata: {set imid 9221}   
+config:
+  daq_ip_addr {11.0.0.214}
+  daq_driver_socket {00400000:2}
+  daq_mux_socket {5}
+  daq_device_element {2}
+  daq_device_type {2}
+  daq_source_ip_addr {11.0.0.211}
+  daq_source_driver_socket {00400000:1}
+  daq_source_mux_socket {1}
+	daq_source_device_element {7}
+  daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+  daq_image_left {20}
+  daq_image_right {343}
+  daq_image_top {1}
+  daq_image_bottom {243}
+  peak_min {80}
+  peak_max {100}
+end.
+
+acquire:
+name: {DRIVER_CEM_04_OFF}
+metadata: {set imid -10064}   
+instrument: {Diagnostic}
+config:
+  daq_ip_addr {11.0.0.211}
+  daq_driver_socket {00400000:1}
+  daq_actions {off}
+  daq_psc {0}
+end.
+
+acquire:
+name: {DRIVER_CEM_05_ON}
+metadata: {set imid -10045}   
+instrument: {Diagnostic}
+config:
+  daq_ip_addr {11.0.0.211}
+  daq_driver_socket {00500000:1}
+  daq_actions {off 500 on 500 sleepall 500 sleepall}
+  daq_psc {1}
+  max_p15_mA {124}
+  max_p5_mA {180}
+  max_n15_mA {99}
+end.
+
+acquire:
+name: {DRIVER_CEO_05_ON}
+metadata: {set imid -10125}   
+instrument: {Diagnostic}
+config:
+  daq_ip_addr {11.0.0.214}
+  daq_driver_socket {00500000:1}
+  daq_actions {off 500 on 500 sleepall 500 sleepall}
+  daq_psc {1}
+  max_p15_mA {178}
+  max_p5_mA {198}
+  max_n15_mA {148}
+end.
+
+acquire:
+name: {BPL_CEM_CEO_04_R1}
+instrument: {BCAM}
+metadata: {set imid 9209}   
+config:
+  daq_ip_addr {11.0.0.211}
+  daq_driver_socket {00500000:1}
+  daq_mux_socket {3}
+  daq_device_element {2}
+  daq_device_type {2}
+  daq_source_ip_addr {11.0.0.214}
+  daq_source_driver_socket {00500000:1}
+  daq_source_mux_socket {2}
+	daq_source_device_element {7}
+  daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+  daq_image_left {20}
+  daq_image_right {343}
+  daq_image_top {1}
+  daq_image_bottom {243}
+  peak_min {80}
+  peak_max {100}
+end.
+
+acquire:
+name: {BPL_CEO_CEM_04_R1}
+instrument: {BCAM}
+metadata: {set imid 9223}   
+config:
+  daq_ip_addr {11.0.0.214}
+  daq_driver_socket {00500000:1}
+  daq_mux_socket {2}
+  daq_device_element {2}
+  daq_device_type {2}
+  daq_source_ip_addr {11.0.0.211}
+  daq_source_driver_socket {00500000:1}
+  daq_source_mux_socket {3}
+	daq_source_device_element {7}
+  daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+  daq_image_left {20}
+  daq_image_right {343}
+  daq_image_top {1}
+  daq_image_bottom {243}
+  peak_min {80}
+  peak_max {100}
+end.
+
+acquire:
+name: {DRIVER_CEM_05_OFF}
+metadata: {set imid -10065}   
+instrument: {Diagnostic}
+config:
+  daq_ip_addr {11.0.0.211}
+  daq_driver_socket {00500000:1}
+  daq_actions {off}
+  daq_psc {0}
+end.
+
+acquire:
+name: {DRIVER_CEM_06_ON}
+metadata: {set imid -10046}   
+instrument: {Diagnostic}
+config:
+  daq_ip_addr {11.0.0.211}
+  daq_driver_socket {00600000:1}
+  daq_actions {off 500 on 500 sleepall 500 sleepall}
+  daq_psc {1}
+  max_p15_mA {126}
+  max_p5_mA {183}
+  max_n15_mA {101}
+end.
+
+acquire:
+name: {DRIVER_CEO_06_ON}
+metadata: {set imid -10126}   
+instrument: {Diagnostic}
+config:
+  daq_ip_addr {11.0.0.214}
+  daq_driver_socket {00600000:1}
+  daq_actions {off 500 on 500 sleepall 500 sleepall}
+  daq_psc {1}
+  max_p15_mA {127}
+  max_p5_mA {185}
+  max_n15_mA {101}
+end.
+
+acquire:
+name: {BPL_CEM_CEO_04_R2}
+instrument: {BCAM}
+metadata: {set imid 9211}   
+config:
+  daq_ip_addr {11.0.0.211}
+  daq_driver_socket {00600000:1}
+  daq_mux_socket {1}
+  daq_device_element {1}
+  daq_device_type {2}
+  daq_source_ip_addr {11.0.0.214}
+  daq_source_driver_socket {00600000:2}
+  daq_source_mux_socket {5}
+	daq_source_device_element {7}
+  daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+  daq_image_left {20}
+  daq_image_right {343}
+  daq_image_top {1}
+  daq_image_bottom {243}
+  peak_min {80}
+  peak_max {100}
+end.
+
+acquire:
+name: {BPL_CEO_CEM_04_R2}
+instrument: {BCAM}
+metadata: {set imid 9225}   
+config:
+  daq_ip_addr {11.0.0.214}
+  daq_driver_socket {00600000:2}
+  daq_mux_socket {5}
+  daq_device_element {2}
+  daq_device_type {2}
+  daq_source_ip_addr {11.0.0.211}
+  daq_source_driver_socket {00600000:1}
+  daq_source_mux_socket {1}
+	daq_source_device_element {7}
+  daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+  daq_image_left {20}
+  daq_image_right {343}
+  daq_image_top {1}
+  daq_image_bottom {243}
+  peak_min {80}
+  peak_max {100}
+end.
+
+acquire:
+name: {DRIVER_CEM_06_OFF}
+metadata: {set imid -10066}   
+instrument: {Diagnostic}
+config:
+  daq_ip_addr {11.0.0.211}
+  daq_driver_socket {00600000:1}
+  daq_actions {off}
+  daq_psc {0}
+end.
+
+acquire:
+name: {DRIVER_CEM_07_ON}
+metadata: {set imid -10047}   
+instrument: {Diagnostic}
+config:
+  daq_ip_addr {11.0.0.211}
+  daq_driver_socket {00700000:1}
+  daq_actions {off 500 on 500 sleepall 500 sleepall}
+  daq_psc {1}
+  max_p15_mA {124}
+  max_p5_mA {182}
+  max_n15_mA {99}
+end.
+
+acquire:
+name: {DRIVER_CEO_07_ON}
+metadata: {set imid -10127}   
+instrument: {Diagnostic}
+config:
+  daq_ip_addr {11.0.0.214}
+  daq_driver_socket {00700000:1}
+  daq_actions {off 500 on 500 sleepall 500 sleepall}
+  daq_psc {1}
+  max_p15_mA {140}
+  max_p5_mA {196}
+  max_n15_mA {113}
+end.
+
+acquire:
+name: {BPL_CEM_CEO_06_R1}
+instrument: {BCAM}
+metadata: {set imid 473}   
+config:
+  daq_ip_addr {11.0.0.211}
+  daq_driver_socket {00700000:1}
+  daq_mux_socket {3}
+  daq_device_element {2}
+  daq_device_type {2}
+  daq_source_ip_addr {11.0.0.214}
+  daq_source_driver_socket {00700000:1}
+  daq_source_mux_socket {2}
+	daq_source_device_element {7}
+  daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+  daq_image_left {20}
+  daq_image_right {343}
+  daq_image_top {1}
+  daq_image_bottom {243}
+  peak_min {80}
+  peak_max {100}
+end.
+
+acquire:
+name: {BPL_CEO_CEM_06_R1}
+instrument: {BCAM}
+metadata: {set imid 9227}   
+config:
+  daq_ip_addr {11.0.0.214}
+  daq_driver_socket {00700000:1}
+  daq_mux_socket {2}
+  daq_device_element {2}
+  daq_device_type {2}
+  daq_source_ip_addr {11.0.0.211}
+  daq_source_driver_socket {00700000:1}
+  daq_source_mux_socket {3}
+	daq_source_device_element {7}
+  daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+  daq_image_left {20}
+  daq_image_right {343}
+  daq_image_top {1}
+  daq_image_bottom {243}
+  peak_min {80}
+  peak_max {100}
+end.
+
+acquire:
+name: {DRIVER_CEM_07_OFF}
+metadata: {set imid -10067}   
+instrument: {Diagnostic}
+config:
+  daq_ip_addr {11.0.0.211}
+  daq_driver_socket {00700000:1}
+  daq_actions {off}
+  daq_psc {0}
+end.
+
+acquire:
+name: {DRIVER_CEM_08_ON}
+metadata: {set imid -10048}   
+instrument: {Diagnostic}
+config:
+  daq_ip_addr {11.0.0.211}
+  daq_driver_socket {00800000:1}
+  daq_actions {off 500 on 500 sleepall 500 sleepall}
+  daq_psc {1}
+  max_p15_mA {125}
+  max_p5_mA {180}
+  max_n15_mA {99}
+end.
+
+acquire:
+name: {DRIVER_CEO_08_ON}
+metadata: {set imid -10128}   
+instrument: {Diagnostic}
+config:
+  daq_ip_addr {11.0.0.214}
+  daq_driver_socket {00800000:1}
+  daq_actions {off 500 on 500 sleepall 500 sleepall}
+  daq_psc {1}
+  max_p15_mA {141}
+  max_p5_mA {199}
+  max_n15_mA {113}
+end.
+
+acquire:
+name: {BPL_CEM_CEO_06_R2}
+instrument: {BCAM}
+metadata: {set imid 353}   
+config:
+  daq_ip_addr {11.0.0.211}
+  daq_driver_socket {00800000:1}
+  daq_mux_socket {1}
+  daq_device_element {1}
+  daq_device_type {2}
+  daq_source_ip_addr {11.0.0.214}
+  daq_source_driver_socket {00800000:2}
+  daq_source_mux_socket {5}
+	daq_source_device_element {7}
+  daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+  daq_image_left {20}
+  daq_image_right {343}
+  daq_image_top {1}
+  daq_image_bottom {243}
+  peak_min {80}
+  peak_max {100}
+end.
+
+acquire:
+name: {BPL_CEO_CEM_06_R2}
+instrument: {BCAM}
+metadata: {set imid 9229}   
+config:
+  daq_ip_addr {11.0.0.214}
+  daq_driver_socket {00800000:2}
+  daq_mux_socket {5}
+  daq_device_element {2}
+  daq_device_type {2}
+  daq_source_ip_addr {11.0.0.211}
+  daq_source_driver_socket {00800000:1}
+  daq_source_mux_socket {1}
+	daq_source_device_element {7}
+  daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+  daq_image_left {20}
+  daq_image_right {343}
+  daq_image_top {1}
+  daq_image_bottom {243}
+  peak_min {80}
+  peak_max {100}
+end.
+
+acquire:
+name: {DRIVER_CEM_08_OFF}
+metadata: {set imid -10068}   
+instrument: {Diagnostic}
+config:
+  daq_ip_addr {11.0.0.211}
+  daq_driver_socket {00800000:1}
+  daq_actions {off}
+  daq_psc {0}
+end.
+
+acquire:
+name: {DRIVER_CEM_17_ON}
+metadata: {set imid -10057}   
+instrument: {Diagnostic}
+config:
+  daq_ip_addr {11.0.0.211}
+  daq_driver_socket {00280000:1}
+  daq_actions {off 500 on 500 sleepall 500 sleepall}
+  daq_psc {1}
+  max_p15_mA {200}
+  max_p5_mA {118}
+  max_n15_mA {111}
+end.
+
+acquire:
+name: {BTS_CEO_CT2_16_R1}
+instrument: {BCAM}
+metadata: {set imid 21169}   
+config:
+  daq_ip_addr {11.0.0.214}
+  daq_driver_socket {00100000:1}
+  daq_mux_socket {2}
+  daq_device_element {2}
+  daq_device_type {2}
+  daq_source_ip_addr {11.0.0.211}
+  daq_source_driver_socket {00280000:6}
+  daq_source_mux_socket {2}
+	daq_source_device_element {7}
+  daq_source_device_type {1}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+  daq_image_left {20}
+  daq_image_right {343}
+  daq_image_top {1}
+  daq_image_bottom {243}
+  peak_min {80}
+  peak_max {100}
+end.
+
+acquire:
+name: {DRIVER_CEM_18_ON}
+metadata: {set imid -10058}   
+instrument: {Diagnostic}
+config:
+  daq_ip_addr {11.0.0.211}
+  daq_driver_socket {00380000:1}
+  daq_actions {off 500 on 500 sleepall 500 sleepall}
+  daq_psc {1}
+  max_p15_mA {108}
+  max_p5_mA {69}
+  max_n15_mA {63}
+end.
+
+acquire:
+name: {DRIVER_CEO_01_OFF}
+metadata: {set imid -10141}   
+instrument: {Diagnostic}
+config:
+  daq_ip_addr {11.0.0.214}
+  daq_driver_socket {00100000:1}
+  daq_actions {off}
+  daq_psc {0}
+end.
+
+acquire:
+name: {BTS_CEO_CT2_16_R2}
+instrument: {BCAM}
+metadata: {set imid 21172}   
+config:
+  daq_ip_addr {11.0.0.214}
+  daq_driver_socket {00200000:2}
+  daq_mux_socket {5}
+  daq_device_element {2}
+  daq_device_type {2}
+  daq_source_ip_addr {11.0.0.211}
+  daq_source_driver_socket {00280000:6}
+  daq_source_mux_socket {1}
+	daq_source_device_element {7}
+  daq_source_device_type {1}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+  daq_image_left {20}
+  daq_image_right {343}
+  daq_image_top {1}
+  daq_image_bottom {243}
+  peak_min {80}
+  peak_max {100}
+end.
+
+acquire:
+name: {DRIVER_CEO_02_OFF}
+metadata: {set imid -10142}   
+instrument: {Diagnostic}
+config:
+  daq_ip_addr {11.0.0.214}
+  daq_driver_socket {00200000:1}
+  daq_actions {off}
+  daq_psc {0}
+end.
+
+acquire:
+name: {BTS_CEO_CT2_02_R1}
+instrument: {BCAM}
+metadata: {set imid 21001}   
+config:
+  daq_ip_addr {11.0.0.214}
+  daq_driver_socket {00300000:1}
+  daq_mux_socket {2}
+  daq_device_element {2}
+  daq_device_type {2}
+  daq_source_ip_addr {11.0.0.211}
+  daq_source_driver_socket {00280000:7}
+  daq_source_mux_socket {2}
+	daq_source_device_element {7}
+  daq_source_device_type {1}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+  daq_image_left {20}
+  daq_image_right {343}
+  daq_image_top {1}
+  daq_image_bottom {243}
+  peak_min {80}
+  peak_max {100}
+end.
+
+acquire:
+name: {DRIVER_CEO_03_OFF}
+metadata: {set imid -10143}   
+instrument: {Diagnostic}
+config:
+  daq_ip_addr {11.0.0.214}
+  daq_driver_socket {00300000:1}
+  daq_actions {off}
+  daq_psc {0}
+end.
+
+acquire:
+name: {BTS_CEO_CT2_02_R2}
+instrument: {BCAM}
+metadata: {set imid 21004}   
+config:
+  daq_ip_addr {11.0.0.214}
+  daq_driver_socket {00400000:2}
+  daq_mux_socket {5}
+  daq_device_element {2}
+  daq_device_type {2}
+  daq_source_ip_addr {11.0.0.211}
+  daq_source_driver_socket {00280000:7}
+  daq_source_mux_socket {1}
+	daq_source_device_element {7}
+  daq_source_device_type {1}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+  daq_image_left {20}
+  daq_image_right {343}
+  daq_image_top {1}
+  daq_image_bottom {243}
+  peak_min {80}
+  peak_max {100}
+end.
+
+acquire:
+name: {DRIVER_CEO_04_OFF}
+metadata: {set imid -10144}   
+instrument: {Diagnostic}
+config:
+  daq_ip_addr {11.0.0.214}
+  daq_driver_socket {00400000:1}
+  daq_actions {off}
+  daq_psc {0}
+end.
+
+acquire:
+name: {BTS_CEO_CT2_04_R1}
+instrument: {BCAM}
+metadata: {set imid 21025}   
+config:
+  daq_ip_addr {11.0.0.214}
+  daq_driver_socket {00500000:1}
+  daq_mux_socket {2}
+  daq_device_element {2}
+  daq_device_type {2}
+  daq_source_ip_addr {11.0.0.211}
+  daq_source_driver_socket {00280000:7}
+  daq_source_mux_socket {8}
+	daq_source_device_element {7}
+  daq_source_device_type {1}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+  daq_image_left {20}
+  daq_image_right {343}
+  daq_image_top {1}
+  daq_image_bottom {243}
+  peak_min {80}
+  peak_max {100}
+end.
+
+acquire:
+name: {DRIVER_CEO_05_OFF}
+metadata: {set imid -10145}   
+instrument: {Diagnostic}
+config:
+  daq_ip_addr {11.0.0.214}
+  daq_driver_socket {00500000:1}
+  daq_actions {off}
+  daq_psc {0}
+end.
+
+acquire:
+name: {BTS_CEO_CT2_04_R2}
+instrument: {BCAM}
+metadata: {set imid 21028}   
+config:
+  daq_ip_addr {11.0.0.214}
+  daq_driver_socket {00600000:2}
+  daq_mux_socket {5}
+  daq_device_element {2}
+  daq_device_type {2}
+  daq_source_ip_addr {11.0.0.211}
+  daq_source_driver_socket {00280000:7}
+  daq_source_mux_socket {9}
+	daq_source_device_element {7}
+  daq_source_device_type {1}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+  daq_image_left {20}
+  daq_image_right {343}
+  daq_image_top {1}
+  daq_image_bottom {243}
+  peak_min {80}
+  peak_max {100}
+end.
+
+acquire:
+name: {DRIVER_CEO_06_OFF}
+metadata: {set imid -10146}   
+instrument: {Diagnostic}
+config:
+  daq_ip_addr {11.0.0.214}
+  daq_driver_socket {00600000:1}
+  daq_actions {off}
+  daq_psc {0}
+end.
+
+acquire:
+name: {BTS_CEO_CT2_06_R1}
+instrument: {BCAM}
+metadata: {set imid 21049}   
+config:
+  daq_ip_addr {11.0.0.214}
+  daq_driver_socket {00700000:1}
+  daq_mux_socket {2}
+  daq_device_element {2}
+  daq_device_type {2}
+  daq_source_ip_addr {11.0.0.211}
+  daq_source_driver_socket {00280000:5}
+  daq_source_mux_socket {1}
+	daq_source_device_element {7}
+  daq_source_device_type {1}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+  daq_image_left {20}
+  daq_image_right {343}
+  daq_image_top {1}
+  daq_image_bottom {243}
+  peak_min {80}
+  peak_max {100}
+end.
+
+acquire:
+name: {DRIVER_CEO_07_OFF}
+metadata: {set imid -10147}   
+instrument: {Diagnostic}
+config:
+  daq_ip_addr {11.0.0.214}
+  daq_driver_socket {00700000:1}
+  daq_actions {off}
+  daq_psc {0}
+end.
+
+acquire:
+name: {BTS_CEO_CT2_06_R2}
+instrument: {BCAM}
+metadata: {set imid 21052}   
+config:
+  daq_ip_addr {11.0.0.214}
+  daq_driver_socket {00800000:2}
+  daq_mux_socket {5}
+  daq_device_element {2}
+  daq_device_type {2}
+  daq_source_ip_addr {11.0.0.211}
+  daq_source_driver_socket {00280000:5}
+  daq_source_mux_socket {2}
+	daq_source_device_element {7}
+  daq_source_device_type {1}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+  daq_image_left {20}
+  daq_image_right {343}
+  daq_image_top {1}
+  daq_image_bottom {243}
+  peak_min {80}
+  peak_max {100}
+end.
+
+acquire:
+name: {DRIVER_CEO_08_OFF}
+metadata: {set imid -10148}   
+instrument: {Diagnostic}
+config:
+  daq_ip_addr {11.0.0.214}
+  daq_driver_socket {00800000:1}
+  daq_actions {off}
+  daq_psc {0}
+end.
+
+acquire:
+name: {DRIVER_CEO_09_ON}
+metadata: {set imid -10129}   
+instrument: {Diagnostic}
+config:
+  daq_ip_addr {11.0.0.214}
+  daq_driver_socket {00900000:1}
+  daq_actions {off 500 on 500 sleepall 500 sleepall}
+  daq_psc {1}
+  max_p15_mA {138}
+  max_p5_mA {195}
+  max_n15_mA {111}
+end.
+
+acquire:
+name: {BTS_CEO_CT2_08_R1}
+instrument: {BCAM}
+metadata: {set imid 21073}   
+config:
+  daq_ip_addr {11.0.0.214}
+  daq_driver_socket {00900000:1}
+  daq_mux_socket {2}
+  daq_device_element {2}
+  daq_device_type {2}
+  daq_source_ip_addr {11.0.0.211}
+  daq_source_driver_socket {00280000:5}
+  daq_source_mux_socket {8}
+	daq_source_device_element {7}
+  daq_source_device_type {1}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+  daq_image_left {20}
+  daq_image_right {343}
+  daq_image_top {1}
+  daq_image_bottom {243}
+  peak_min {80}
+  peak_max {100}
+end.
+
+acquire:
+name: {DRIVER_CEO_10_ON}
+metadata: {set imid -10130}   
+instrument: {Diagnostic}
+config:
+  daq_ip_addr {11.0.0.214}
+  daq_driver_socket {00A00000:1}
+  daq_actions {off 500 on 500 sleepall 500 sleepall}
+  daq_psc {1}
+  max_p15_mA {181}
+  max_p5_mA {198}
+  max_n15_mA {154}
+end.
+
+acquire:
+name: {BTS_CEO_CT2_08_R2}
+instrument: {BCAM}
+metadata: {set imid 21076}   
+config:
+  daq_ip_addr {11.0.0.214}
+  daq_driver_socket {00A00000:2}
+  daq_mux_socket {5}
+  daq_device_element {2}
+  daq_device_type {2}
+  daq_source_ip_addr {11.0.0.211}
+  daq_source_driver_socket {00280000:5}
+  daq_source_mux_socket {9}
+	daq_source_device_element {7}
+  daq_source_device_type {1}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+  daq_image_left {20}
+  daq_image_right {343}
+  daq_image_top {1}
+  daq_image_bottom {243}
+  peak_min {80}
+  peak_max {100}
+end.
+
+acquire:
+name: {DRIVER_CEO_11_ON}
+metadata: {set imid -10131}   
+instrument: {Diagnostic}
+config:
+  daq_ip_addr {11.0.0.214}
+  daq_driver_socket {00B00000:1}
+  daq_actions {off 500 on 500 sleepall 500 sleepall}
+  daq_psc {1}
+  max_p15_mA {140}
+  max_p5_mA {193}
+  max_n15_mA {113}
+end.
+
+acquire:
+name: {BTS_CEO_CT2_10_R1}
+instrument: {BCAM}
+metadata: {set imid 21097}   
+config:
+  daq_ip_addr {11.0.0.214}
+  daq_driver_socket {00B00000:1}
+  daq_mux_socket {2}
+  daq_device_element {2}
+  daq_device_type {2}
+  daq_source_ip_addr {11.0.0.211}
+  daq_source_driver_socket {00280000:8}
+  daq_source_mux_socket {9}
+	daq_source_device_element {7}
+  daq_source_device_type {1}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+  daq_image_left {20}
+  daq_image_right {343}
+  daq_image_top {1}
+  daq_image_bottom {243}
+  peak_min {80}
+  peak_max {100}
+end.
+
+acquire:
+name: {DRIVER_CEO_12_ON}
+metadata: {set imid -10132}   
+instrument: {Diagnostic}
+config:
+  daq_ip_addr {11.0.0.214}
+  daq_driver_socket {00C00000:1}
+  daq_actions {off 500 on 500 sleepall 500 sleepall}
+  daq_psc {1}
+  max_p15_mA {142}
+  max_p5_mA {199}
+  max_n15_mA {114}
+end.
+
+acquire:
+name: {BTS_CEO_CT2_10_R2}
+instrument: {BCAM}
+metadata: {set imid 21100}   
+config:
+  daq_ip_addr {11.0.0.214}
+  daq_driver_socket {00C00000:2}
+  daq_mux_socket {5}
+  daq_device_element {2}
+  daq_device_type {2}
+  daq_source_ip_addr {11.0.0.211}
+  daq_source_driver_socket {00280000:8}
+  daq_source_mux_socket {8}
+	daq_source_device_element {7}
+  daq_source_device_type {1}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+  daq_image_left {20}
+  daq_image_right {343}
+  daq_image_top {1}
+  daq_image_bottom {243}
+  peak_min {80}
+  peak_max {100}
+end.
+
+acquire:
+name: {DRIVER_CEO_13_ON}
+metadata: {set imid -10133}   
+instrument: {Diagnostic}
+config:
+  daq_ip_addr {11.0.0.214}
+  daq_driver_socket {00D00000:1}
+  daq_actions {off 500 on 500 sleepall 500 sleepall}
+  daq_psc {1}
+  max_p15_mA {138}
+  max_p5_mA {206}
+  max_n15_mA {112}
+end.
+
+acquire:
+name: {BTS_CEO_CT2_12_R1}
+instrument: {BCAM}
+metadata: {set imid 21121}   
+config:
+  daq_ip_addr {11.0.0.214}
+  daq_driver_socket {00D00000:1}
+  daq_mux_socket {2}
+  daq_device_element {2}
+  daq_device_type {2}
+  daq_source_ip_addr {11.0.0.211}
+  daq_source_driver_socket {00280000:8}
+  daq_source_mux_socket {1}
+	daq_source_device_element {7}
+  daq_source_device_type {1}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+  daq_image_left {20}
+  daq_image_right {343}
+  daq_image_top {1}
+  daq_image_bottom {243}
+  peak_min {80}
+  peak_max {100}
+end.
+
+acquire:
+name: {DRIVER_CEO_14_ON}
+metadata: {set imid -10134}   
+instrument: {Diagnostic}
+config:
+  daq_ip_addr {11.0.0.214}
+  daq_driver_socket {00E00000:1}
+  daq_actions {off 500 on 500 sleepall 500 sleepall}
+  daq_psc {1}
+  max_p15_mA {142}
+  max_p5_mA {199}
+  max_n15_mA {115}
+end.
+
+acquire:
+name: {BTS_CEO_CT2_12_R2}
+instrument: {BCAM}
+metadata: {set imid 21124}   
+config:
+  daq_ip_addr {11.0.0.214}
+  daq_driver_socket {00E00000:2}
+  daq_mux_socket {5}
+  daq_device_element {2}
+  daq_device_type {2}
+  daq_source_ip_addr {11.0.0.211}
+  daq_source_driver_socket {00280000:8}
+  daq_source_mux_socket {2}
+	daq_source_device_element {7}
+  daq_source_device_type {1}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+  daq_image_left {20}
+  daq_image_right {343}
+  daq_image_top {1}
+  daq_image_bottom {243}
+  peak_min {80}
+  peak_max {100}
+end.
+
+acquire:
+name: {DRIVER_CEO_15_ON}
+metadata: {set imid -10135}   
+instrument: {Diagnostic}
+config:
+  daq_ip_addr {11.0.0.214}
+  daq_driver_socket {00F00000:1}
+  daq_actions {off 500 on 500 sleepall 500 sleepall}
+  daq_psc {1}
+  max_p15_mA {140}
+  max_p5_mA {192}
+  max_n15_mA {113}
+end.
+
+acquire:
+name: {BTS_CEO_CT2_14_R1}
+instrument: {BCAM}
+metadata: {set imid 21145}   
+config:
+  daq_ip_addr {11.0.0.214}
+  daq_driver_socket {00F00000:1}
+  daq_mux_socket {2}
+  daq_device_element {2}
+  daq_device_type {2}
+  daq_source_ip_addr {11.0.0.211}
+  daq_source_driver_socket {00280000:6}
+  daq_source_mux_socket {8}
+	daq_source_device_element {7}
+  daq_source_device_type {1}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+  daq_image_left {20}
+  daq_image_right {343}
+  daq_image_top {1}
+  daq_image_bottom {243}
+  peak_min {80}
+  peak_max {100}
+end.
+
+acquire:
+name: {DRIVER_CEO_16_ON}
+metadata: {set imid -10136}   
+instrument: {Diagnostic}
+config:
+  daq_ip_addr {11.0.0.214}
+  daq_driver_socket {00180000:1}
+  daq_actions {off 500 on 500 sleepall 500 sleepall}
+  daq_psc {1}
+  max_p15_mA {141}
+  max_p5_mA {198}
+  max_n15_mA {113}
+end.
+
+acquire:
+name: {BTS_CEO_CT2_14_R2}
+instrument: {BCAM}
+metadata: {set imid 21148}   
+config:
+  daq_ip_addr {11.0.0.214}
+  daq_driver_socket {00180000:2}
+  daq_mux_socket {5}
+  daq_device_element {2}
+  daq_device_type {2}
+  daq_source_ip_addr {11.0.0.211}
+  daq_source_driver_socket {00280000:6}
+  daq_source_mux_socket {9}
+	daq_source_device_element {7}
+  daq_source_device_type {1}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+  daq_image_left {20}
+  daq_image_right {343}
+  daq_image_top {1}
+  daq_image_bottom {243}
+  peak_min {80}
+  peak_max {100}
+end.
+
+acquire:
+name: {DRIVER_CEM_17_OFF}
+metadata: {set imid -10077}   
+instrument: {Diagnostic}
+config:
+  daq_ip_addr {11.0.0.211}
+  daq_driver_socket {00280000:1}
+  daq_actions {off}
+  daq_psc {0}
+end.
+
+acquire:
+name: {DRIVER_CEM_18_OFF}
+metadata: {set imid -10078}   
+instrument: {Diagnostic}
+config:
+  daq_ip_addr {11.0.0.211}
+  daq_driver_socket {00380000:1}
+  daq_actions {off}
+  daq_psc {0}
+end.
+
+acquire:
+name: {DRIVER_CEM_09_ON}
+metadata: {set imid -10049}   
+instrument: {Diagnostic}
+config:
+  daq_ip_addr {11.0.0.211}
+  daq_driver_socket {00900000:1}
+  daq_actions {off 500 on 500 sleepall 500 sleepall}
+  daq_psc {1}
+  max_p15_mA {125}
+  max_p5_mA {180}
+  max_n15_mA {99}
+end.
+
+acquire:
+name: {BPL_CEM_CEO_08_R1}
+instrument: {BCAM}
+metadata: {set imid 991}   
+config:
+  daq_ip_addr {11.0.0.211}
+  daq_driver_socket {00900000:1}
+  daq_mux_socket {3}
+  daq_device_element {2}
+  daq_device_type {2}
+  daq_source_ip_addr {11.0.0.214}
+  daq_source_driver_socket {00900000:1}
+  daq_source_mux_socket {2}
+	daq_source_device_element {7}
+  daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+  daq_image_left {20}
+  daq_image_right {343}
+  daq_image_top {1}
+  daq_image_bottom {243}
+  peak_min {80}
+  peak_max {100}
+end.
+
+acquire:
+name: {BPL_CEO_CEM_08_R1}
+instrument: {BCAM}
+metadata: {set imid 9231}   
+config:
+  daq_ip_addr {11.0.0.214}
+  daq_driver_socket {00900000:1}
+  daq_mux_socket {2}
+  daq_device_element {2}
+  daq_device_type {2}
+  daq_source_ip_addr {11.0.0.211}
+  daq_source_driver_socket {00900000:1}
+  daq_source_mux_socket {3}
+	daq_source_device_element {7}
+  daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+  daq_image_left {20}
+  daq_image_right {343}
+  daq_image_top {1}
+  daq_image_bottom {243}
+  peak_min {80}
+  peak_max {100}
+end.
+
+acquire:
+name: {DRIVER_CEM_09_OFF}
+metadata: {set imid -10069}   
+instrument: {Diagnostic}
+config:
+  daq_ip_addr {11.0.0.211}
+  daq_driver_socket {00900000:1}
+  daq_actions {off}
+  daq_psc {0}
+end.
+
+acquire:
+name: {DRIVER_CEO_09_OFF}
+metadata: {set imid -10149}   
+instrument: {Diagnostic}
+config:
+  daq_ip_addr {11.0.0.214}
+  daq_driver_socket {00900000:1}
+  daq_actions {off}
+  daq_psc {0}
+end.
+
+acquire:
+name: {DRIVER_CEM_10_ON}
+metadata: {set imid -10050}   
+instrument: {Diagnostic}
+config:
+  daq_ip_addr {11.0.0.211}
+  daq_driver_socket {00A00000:1}
+  daq_actions {off 500 on 500 sleepall 500 sleepall}
+  daq_psc {1}
+  max_p15_mA {166}
+  max_p5_mA {186}
+  max_n15_mA {101}
+end.
+
+acquire:
+name: {BPL_CEM_CEO_08_R2}
+instrument: {BCAM}
+metadata: {set imid 1364}   
+config:
+  daq_ip_addr {11.0.0.211}
+  daq_driver_socket {00A00000:1}
+  daq_mux_socket {1}
+  daq_device_element {1}
+  daq_device_type {2}
+  daq_source_ip_addr {11.0.0.214}
+  daq_source_driver_socket {00A00000:2}
+  daq_source_mux_socket {5}
+	daq_source_device_element {7}
+  daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+  daq_image_left {20}
+  daq_image_right {343}
+  daq_image_top {1}
+  daq_image_bottom {243}
+  peak_min {80}
+  peak_max {100}
+end.
+
+acquire:
+name: {BPL_CEO_CEM_08_R2}
+instrument: {BCAM}
+metadata: {set imid 9233}   
+config:
+  daq_ip_addr {11.0.0.214}
+  daq_driver_socket {00A00000:2}
+  daq_mux_socket {5}
+  daq_device_element {2}
+  daq_device_type {2}
+  daq_source_ip_addr {11.0.0.211}
+  daq_source_driver_socket {00A00000:1}
+  daq_source_mux_socket {1}
+	daq_source_device_element {7}
+  daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+  daq_image_left {20}
+  daq_image_right {343}
+  daq_image_top {1}
+  daq_image_bottom {243}
+  peak_min {80}
+  peak_max {100}
+end.
+
+acquire:
+name: {DRIVER_CEM_10_OFF}
+metadata: {set imid -10070}   
+instrument: {Diagnostic}
+config:
+  daq_ip_addr {11.0.0.211}
+  daq_driver_socket {00A00000:1}
+  daq_actions {off}
+  daq_psc {0}
+end.
+
+acquire:
+name: {DRIVER_CEO_10_OFF}
+metadata: {set imid -10150}   
+instrument: {Diagnostic}
+config:
+  daq_ip_addr {11.0.0.214}
+  daq_driver_socket {00A00000:1}
+  daq_actions {off}
+  daq_psc {0}
+end.
+
+acquire:
+name: {DRIVER_CEM_11_ON}
+metadata: {set imid -10051}   
+instrument: {Diagnostic}
+config:
+  daq_ip_addr {11.0.0.211}
+  daq_driver_socket {00B00000:1}
+  daq_actions {off 500 on 500 sleepall 500 sleepall}
+  daq_psc {1}
+  max_p15_mA {121}
+  max_p5_mA {176}
+  max_n15_mA {96}
+end.
+
+acquire:
+name: {BPL_CEM_CEO_10_R1}
+instrument: {BCAM}
+metadata: {set imid 1129}   
+config:
+  daq_ip_addr {11.0.0.211}
+  daq_driver_socket {00B00000:1}
+  daq_mux_socket {3}
+  daq_device_element {2}
+  daq_device_type {2}
+  daq_source_ip_addr {11.0.0.214}
+  daq_source_driver_socket {00B00000:1}
+  daq_source_mux_socket {2}
+	daq_source_device_element {7}
+  daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+  daq_image_left {20}
+  daq_image_right {343}
+  daq_image_top {1}
+  daq_image_bottom {243}
+  peak_min {80}
+  peak_max {100}
+end.
+
+acquire:
+name: {BPL_CEO_CEM_10_R1}
+instrument: {BCAM}
+metadata: {set imid 1441}   
+config:
+  daq_ip_addr {11.0.0.214}
+  daq_driver_socket {00B00000:1}
+  daq_mux_socket {2}
+  daq_device_element {2}
+  daq_device_type {2}
+  daq_source_ip_addr {11.0.0.211}
+  daq_source_driver_socket {00B00000:1}
+  daq_source_mux_socket {3}
+	daq_source_device_element {7}
+  daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+  daq_image_left {20}
+  daq_image_right {343}
+  daq_image_top {1}
+  daq_image_bottom {243}
+  peak_min {80}
+  peak_max {100}
+end.
+
+acquire:
+name: {DRIVER_CEM_11_OFF}
+metadata: {set imid -10071}   
+instrument: {Diagnostic}
+config:
+  daq_ip_addr {11.0.0.211}
+  daq_driver_socket {00B00000:1}
+  daq_actions {off}
+  daq_psc {0}
+end.
+
+acquire:
+name: {DRIVER_CEO_11_OFF}
+metadata: {set imid -10151}   
+instrument: {Diagnostic}
+config:
+  daq_ip_addr {11.0.0.214}
+  daq_driver_socket {00B00000:1}
+  daq_actions {off}
+  daq_psc {0}
+end.
+
+acquire:
+name: {DRIVER_CEM_12_ON}
+metadata: {set imid -10052}   
+instrument: {Diagnostic}
+config:
+  daq_ip_addr {11.0.0.211}
+  daq_driver_socket {00C00000:1}
+  daq_actions {off 500 on 500 sleepall 500 sleepall}
+  daq_psc {1}
+  max_p15_mA {123}
+  max_p5_mA {181}
+  max_n15_mA {98}
+end.
+
+acquire:
+name: {BPL_CEM_CEO_10_R2}
+instrument: {BCAM}
+metadata: {set imid 1199}   
+config:
+  daq_ip_addr {11.0.0.211}
+  daq_driver_socket {00C00000:1}
+  daq_mux_socket {1}
+  daq_device_element {1}
+  daq_device_type {2}
+  daq_source_ip_addr {11.0.0.214}
+  daq_source_driver_socket {00C00000:2}
+  daq_source_mux_socket {5}
+	daq_source_device_element {7}
+  daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+  daq_image_left {20}
+  daq_image_right {343}
+  daq_image_top {1}
+  daq_image_bottom {243}
+  peak_min {80}
+  peak_max {100}
+end.
+
+acquire:
+name: {BPL_CEO_CEM_10_R2}
+instrument: {BCAM}
+metadata: {set imid 1374}   
+config:
+  daq_ip_addr {11.0.0.214}
+  daq_driver_socket {00C00000:2}
+  daq_mux_socket {5}
+  daq_device_element {2}
+  daq_device_type {2}
+  daq_source_ip_addr {11.0.0.211}
+  daq_source_driver_socket {00C00000:1}
+  daq_source_mux_socket {1}
+	daq_source_device_element {7}
+  daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+  daq_image_left {20}
+  daq_image_right {343}
+  daq_image_top {1}
+  daq_image_bottom {243}
+  peak_min {80}
+  peak_max {100}
+end.
+
+acquire:
+name: {DRIVER_CEM_12_OFF}
+metadata: {set imid -10072}   
+instrument: {Diagnostic}
+config:
+  daq_ip_addr {11.0.0.211}
+  daq_driver_socket {00C00000:1}
+  daq_actions {off}
+  daq_psc {0}
+end.
+
+acquire:
+name: {DRIVER_CEO_12_OFF}
+metadata: {set imid -10152}   
+instrument: {Diagnostic}
+config:
+  daq_ip_addr {11.0.0.214}
+  daq_driver_socket {00C00000:1}
+  daq_actions {off}
+  daq_psc {0}
+end.
+
+acquire:
+name: {DRIVER_CEM_13_ON}
+metadata: {set imid -10053}   
+instrument: {Diagnostic}
+config:
+  daq_ip_addr {11.0.0.211}
+  daq_driver_socket {00D00000:1}
+  daq_actions {off 500 on 500 sleepall 500 sleepall}
+  daq_psc {1}
+  max_p15_mA {124}
+  max_p5_mA {180}
+  max_n15_mA {98}
+end.
+
+acquire:
+name: {BPL_CEM_CEO_12_R1}
+instrument: {BCAM}
+metadata: {set imid 80}   
+config:
+  daq_ip_addr {11.0.0.211}
+  daq_driver_socket {00D00000:1}
+  daq_mux_socket {3}
+  daq_device_element {2}
+  daq_device_type {2}
+  daq_source_ip_addr {11.0.0.214}
+  daq_source_driver_socket {00D00000:1}
+  daq_source_mux_socket {2}
+	daq_source_device_element {7}
+  daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+  daq_image_left {20}
+  daq_image_right {343}
+  daq_image_top {1}
+  daq_image_bottom {243}
+  peak_min {80}
+  peak_max {100}
+end.
+
+acquire:
+name: {BPL_CEO_CEM_12_R1}
+instrument: {BCAM}
+metadata: {set imid 9235}   
+config:
+  daq_ip_addr {11.0.0.214}
+  daq_driver_socket {00D00000:1}
+  daq_mux_socket {2}
+  daq_device_element {2}
+  daq_device_type {2}
+  daq_source_ip_addr {11.0.0.211}
+  daq_source_driver_socket {00D00000:1}
+  daq_source_mux_socket {3}
+	daq_source_device_element {7}
+  daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+  daq_image_left {20}
+  daq_image_right {343}
+  daq_image_top {1}
+  daq_image_bottom {243}
+  peak_min {80}
+  peak_max {100}
+end.
+
+acquire:
+name: {DRIVER_CEM_13_OFF}
+metadata: {set imid -10073}   
+instrument: {Diagnostic}
+config:
+  daq_ip_addr {11.0.0.211}
+  daq_driver_socket {00D00000:1}
+  daq_actions {off}
+  daq_psc {0}
+end.
+
+acquire:
+name: {DRIVER_CEO_13_OFF}
+metadata: {set imid -10153}   
+instrument: {Diagnostic}
+config:
+  daq_ip_addr {11.0.0.214}
+  daq_driver_socket {00D00000:1}
+  daq_actions {off}
+  daq_psc {0}
+end.
+
+acquire:
+name: {DRIVER_CEM_14_ON}
+metadata: {set imid -10054}   
+instrument: {Diagnostic}
+config:
+  daq_ip_addr {11.0.0.211}
+  daq_driver_socket {00E00000:1}
+  daq_actions {off 500 on 500 sleepall 500 sleepall}
+  daq_psc {1}
+  max_p15_mA {124}
+  max_p5_mA {183}
+  max_n15_mA {99}
+end.
+
+acquire:
+name: {BPL_CEM_CEO_12_R2}
+instrument: {BCAM}
+metadata: {set imid 106}   
+config:
+  daq_ip_addr {11.0.0.211}
+  daq_driver_socket {00E00000:1}
+  daq_mux_socket {1}
+  daq_device_element {1}
+  daq_device_type {2}
+  daq_source_ip_addr {11.0.0.214}
+  daq_source_driver_socket {00E00000:2}
+  daq_source_mux_socket {5}
+	daq_source_device_element {7}
+  daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+  daq_image_left {20}
+  daq_image_right {343}
+  daq_image_top {1}
+  daq_image_bottom {243}
+  peak_min {80}
+  peak_max {100}
+end.
+
+acquire:
+name: {BPL_CEO_CEM_12_R2}
+instrument: {BCAM}
+metadata: {set imid 9237}   
+config:
+  daq_ip_addr {11.0.0.214}
+  daq_driver_socket {00E00000:2}
+  daq_mux_socket {5}
+  daq_device_element {2}
+  daq_device_type {2}
+  daq_source_ip_addr {11.0.0.211}
+  daq_source_driver_socket {00E00000:1}
+  daq_source_mux_socket {1}
+	daq_source_device_element {7}
+  daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+  daq_image_left {20}
+  daq_image_right {343}
+  daq_image_top {1}
+  daq_image_bottom {243}
+  peak_min {80}
+  peak_max {100}
+end.
+
+acquire:
+name: {DRIVER_CEM_14_OFF}
+metadata: {set imid -10074}   
+instrument: {Diagnostic}
+config:
+  daq_ip_addr {11.0.0.211}
+  daq_driver_socket {00E00000:1}
+  daq_actions {off}
+  daq_psc {0}
+end.
+
+acquire:
+name: {DRIVER_CEO_14_OFF}
+metadata: {set imid -10154}   
+instrument: {Diagnostic}
+config:
+  daq_ip_addr {11.0.0.214}
+  daq_driver_socket {00E00000:1}
+  daq_actions {off}
+  daq_psc {0}
+end.
+
+acquire:
+name: {DRIVER_CEM_15_ON}
+metadata: {set imid -10055}   
+instrument: {Diagnostic}
+config:
+  daq_ip_addr {11.0.0.211}
+  daq_driver_socket {00F00000:1}
+  daq_actions {off 500 on 500 sleepall 500 sleepall}
+  daq_psc {1}
+  max_p15_mA {125}
+  max_p5_mA {183}
+  max_n15_mA {100}
+end.
+
+acquire:
+name: {BPL_CEM_CEO_14_R1}
+instrument: {BCAM}
+metadata: {set imid 9213}   
+config:
+  daq_ip_addr {11.0.0.211}
+  daq_driver_socket {00F00000:1}
+  daq_mux_socket {3}
+  daq_device_element {2}
+  daq_device_type {2}
+  daq_source_ip_addr {11.0.0.214}
+  daq_source_driver_socket {00F00000:1}
+  daq_source_mux_socket {2}
+	daq_source_device_element {7}
+  daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+  daq_image_left {20}
+  daq_image_right {343}
+  daq_image_top {1}
+  daq_image_bottom {243}
+  peak_min {80}
+  peak_max {100}
+end.
+
+acquire:
+name: {BPL_CEO_CEM_14_R1}
+instrument: {BCAM}
+metadata: {set imid 9239}   
+config:
+  daq_ip_addr {11.0.0.214}
+  daq_driver_socket {00F00000:1}
+  daq_mux_socket {2}
+  daq_device_element {2}
+  daq_device_type {2}
+  daq_source_ip_addr {11.0.0.211}
+  daq_source_driver_socket {00F00000:1}
+  daq_source_mux_socket {3}
+	daq_source_device_element {7}
+  daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+  daq_image_left {20}
+  daq_image_right {343}
+  daq_image_top {1}
+  daq_image_bottom {243}
+  peak_min {80}
+  peak_max {100}
+end.
+
+acquire:
+name: {DRIVER_CEM_15_OFF}
+metadata: {set imid -10075}   
+instrument: {Diagnostic}
+config:
+  daq_ip_addr {11.0.0.211}
+  daq_driver_socket {00F00000:1}
+  daq_actions {off}
+  daq_psc {0}
+end.
+
+acquire:
+name: {DRIVER_CEO_15_OFF}
+metadata: {set imid -10155}   
+instrument: {Diagnostic}
+config:
+  daq_ip_addr {11.0.0.214}
+  daq_driver_socket {00F00000:1}
+  daq_actions {off}
+  daq_psc {0}
+end.
+
+acquire:
+name: {DRIVER_CEM_16_ON}
+metadata: {set imid -10056}   
+instrument: {Diagnostic}
+config:
+  daq_ip_addr {11.0.0.211}
+  daq_driver_socket {00180000:1}
+  daq_actions {off 500 on 500 sleepall 500 sleepall}
+  daq_psc {1}
+  max_p15_mA {125}
+  max_p5_mA {182}
+  max_n15_mA {100}
+end.
+
+acquire:
+name: {BPL_CEM_CEO_14_R2}
+instrument: {BCAM}
+metadata: {set imid 9215}   
+config:
+  daq_ip_addr {11.0.0.211}
+  daq_driver_socket {00180000:1}
+  daq_mux_socket {1}
+  daq_device_element {1}
+  daq_device_type {2}
+  daq_source_ip_addr {11.0.0.214}
+  daq_source_driver_socket {00180000:2}
+  daq_source_mux_socket {5}
+	daq_source_device_element {7}
+  daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+  daq_image_left {20}
+  daq_image_right {343}
+  daq_image_top {1}
+  daq_image_bottom {243}
+  peak_min {80}
+  peak_max {100}
+end.
+
+acquire:
+name: {BPL_CEO_CEM_14_R2}
+instrument: {BCAM}
+metadata: {set imid 9241}   
+config:
+  daq_ip_addr {11.0.0.214}
+  daq_driver_socket {00180000:2}
+  daq_mux_socket {5}
+  daq_device_element {2}
+  daq_device_type {2}
+  daq_source_ip_addr {11.0.0.211}
+  daq_source_driver_socket {00180000:1}
+  daq_source_mux_socket {1}
+	daq_source_device_element {7}
+  daq_source_device_type {2}
+	daq_flash_seconds {0.1}
+	daq_adjust_flash {0}
+  daq_image_left {20}
+  daq_image_right {343}
+  daq_image_top {1}
+  daq_image_bottom {243}
+  peak_min {80}
+  peak_max {100}
+end.
+
+acquire:
+name: {DRIVER_CEM_16_OFF}
+metadata: {set imid -10076}   
+instrument: {Diagnostic}
+config:
+  daq_ip_addr {11.0.0.211}
+  daq_driver_socket {00180000:1}
+  daq_actions {off}
+  daq_psc {0}
+end.
+
+acquire:
+name: {DRIVER_CEO_16_OFF}
+metadata: {set imid -10156}   
+instrument: {Diagnostic}
+config:
+  daq_ip_addr {11.0.0.214}
+  daq_driver_socket {00180000:1}
+  daq_actions {off}
+  daq_psc {0}
+end.
+

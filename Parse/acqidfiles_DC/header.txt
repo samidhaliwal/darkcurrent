@@ -1,0 +1,310 @@
+##############################################################################
+acquisifier:
+post_processing: {
+	global LWDAQ_Info
+	set LWDAQ_Info(queue_ms) 200
+	LWDAQ_print $info(text) "set delay 200" red
+}
+
+config:
+	cycle_period_seconds 0
+end.
+
+
+##############################################################################
+default:
+instrument: BCAM
+
+default_post_processing: {
+	set experr 0
+	set spoterr 0
+	set pixerr 0
+	set exposure 0
+	set avg 0
+	set std 0
+	set max 0
+	set min 0
+	set pixels_in_spot 0
+	set contrast 0
+	set background 0
+	set background_noise 0
+	set im_id 0
+	set readerr 0
+	set error_code 0
+	set disb 0
+	eval $metadata
+	scan $result "%s %s" dum errnum
+	if { $errnum == "-1" } {
+		LWDAQ_print $info(text) "analysis error" red
+		set readerr -201
+	}
+	if { [regexp {ERROR: *} $result] } {
+		LWDAQ_print $info(text) $result red
+		set readerr -200
+	}
+	if { [lwdaq_image_exists $iconfig(memory_name)] != "" } {
+		set imageok 1
+	} else {
+		set imageok 0
+		set readerr -202
+	}
+	if { $readerr == -201 } {
+		set imageok 0 
+	}
+ 	# Write the BCAM image out to the results directory for the analysis program
+ 	# Want to keep image, regardless that it is not good
+	#if {$imageok == 1 } {
+	set fn [file join [file dirname $config(run_results)] $name\.ccd]
+	LWDAQ_write_image_file $iconfig(memory_name) $fn
+	#}
+
+	if {$readerr == 0 } {
+		set error_code 0
+		set pixels_in_spot 0 
+		set contrast  0 
+		set background 0 
+		set background_noise 0 
+		set charac [lwdaq_image_characteristics $iconfig(memory_name)]
+		scan $charac "%d %d %d %d %f %f %f %f" dum1 dum2 dum3 dum4 avg std max min
+		set exposure $iconfig(daq_flash_seconds)
+		set expo [ expr 1000000*$exposure ] 
+	} 
+	set time [clock seconds]
+	set lwdaqerr 0
+
+	if { $readerr !=0 } {
+		set result "$name -1000 -1000 -1 -1 0 0 0 0 0 0 0 0"
+	}
+
+	set lwerr [LWDAQ_is_error_result "$result"]
+	if { $lwerr} {
+		LWDAQ_print $info(text)  "LWDAQ ERROR" red
+		set result "$name -1000 -1000 -1 -1 0 0 0 0 0 0 0 0"
+	}
+
+	if { $readerr ==0 } {
+		scan $result "%s %f %f %d %d %f %d %f %f %d " dummy x y pix int sns thr x2 y2 pix2
+		# check for too many pixels on
+		set pixerr 0
+		if {$pix > 1000} {
+			set pixerr -400
+		}  
+		# check for too large exposure time 
+		set experr 0
+		if {$expo > 90000} {
+			set experr -100
+		}  
+		if {$x2 == -1.0 || $x2==0 || $pix2 < 5} {
+			LWDAQ_print $info(text) "one spot" blue
+			set spoterr 0 
+	   	} else {
+			LWDAQ_print $info(text) "two spots" red
+			set spoterr 0 
+		}
+	}
+
+	set lwdaqerr [ expr $error_code+$spoterr+$pixerr+$experr+$readerr-40*$lwerr]
+	set error_code $lwdaqerr
+	set im_id $imid
+
+	scan $result "%s %f %f %d %d %f %d" dummy x y pix int sns thr
+	set output [ format "%s %d %7.5f %7.5f %7.5f %d\n#DQMB %s %d px %d in %1.3f se %d th %1.0f ex %1.0f av %1.0f st %1.0f mx %1.0f mn %d ec %d np %1.3f co %1.3f bg %1.3f rn" $name $im_id [ expr $x/1000. ] [ expr $y/1000. ] 0.0 $time $name $pix $int $sns $thr [ expr 1000000*$exposure ] $avg $std $max $min $error_code $pixels_in_spot $contrast $background $background_noise ]        
+	
+	set f [open $config(run_results) a]
+	puts $f $output
+	close $f
+	LWDAQ_print $info(text) $output blue
+	set fn [file join [file dirname $config(run_results)] $name\.ccd]
+
+	if { $imageok == 1 } {
+		set fns [file join [file dirname $config(run_results)] $name]
+	}
+	set result $output
+}
+
+
+config:
+	image_source    daq
+	analysis_enable {1}
+	analysis_threshold {25 # 2}
+	analysis_num_spots {2}
+	daq_source_ip_addr {*}
+	ambient_exposure_seconds {0}
+	intensify {exact}
+	daq_adjust_flash {1}
+	daq_subtract_background {0}
+	peak_min {80}
+	peak_max {100}
+	extended_parameters {0.4 0.8 0}
+	flash_seconds_max {0.1}
+	flash_seconds_reduce {0.8}
+	flash_seconds_step {0.000001}
+	flash_seconds_transition {0.000010}
+	flash_max_tries {60}
+end.
+
+
+default:
+instrument: Rasnik
+
+default_post_processing: {
+	set readerr 0
+	set exposure 0  
+	set avg 0
+	set std 0
+	set max 0
+	set min 0
+	set edges_per_line 0
+	set contrast 0
+	set bright_noise 0
+	set dim_noise 0
+	set sharpness 0
+	set im_id 0
+	set disb 0
+	eval $metadata
+	set im_id $imid
+	set errtype 0
+	set lwerr 0
+	set lwerr [LWDAQ_is_error_result "$result"]
+	if { $lwerr} {
+		LWDAQ_print $info(text) "LWDAQ ERROR" red
+		set errtype -3
+		set readerr -203
+	}
+	
+	scan $result "%s %s" dum errnum
+	if { $errnum == "-1" } {
+		LWDAQ_print $info(text) "analysis error" red
+		set errtype -1
+		set readerr -201
+	}
+
+	if { [regexp {ERROR: *} $result] } {
+		LWDAQ_print $info(text) $result red
+		set errtype -4
+		set readerr -200
+	}
+
+	LWDAQ_print $info(text) $errtype red
+
+	# check for image exists:    1 means exists
+	if { [lwdaq_image_exists $iconfig(memory_name)] != "" } {
+		set imageok 1
+	} else {
+		set imageok 0
+		set readerr -202
+	}
+	if { $readerr == -201 } {
+		set imageok 0 
+	}
+	
+	if { $imageok == 0 } {
+		LWDAQ_print $info(text) "noimage" red
+		LWDAQ_print $info(text) $readerr red
+	}
+	#if { $imageok == 1 } {
+	#Want to keep image even though not okay
+	set fn [file join [file dirname $config(run_results)] $name\.ccd]
+	LWDAQ_write_image_file $iconfig(memory_name) $fn
+	#}
+   set error_code 0
+
+	if { $readerr == 0 } {
+		set charac [lwdaq_image_characteristics $iconfig(memory_name)]
+		scan $charac "%d %d %d %d %f %f %f %f" dum1 dum2 dum3 dum4 avg std max min
+		set exposure $iconfig(daq_flash_seconds)
+	} 
+	set time [clock seconds]
+	
+	if { $readerr !=0 } {
+		LWDAQ_print $info(text) $readerr red
+		LWDAQ_print $info(text) $name red
+		set result "$name -1000 -1000 -1 -1 0 0 0 0 0 0 0 0"
+	}
+
+	set lwdaqerr [expr  $error_code+$readerr]
+	set error_code $lwdaqerr
+	scan $result "%s %f %f %f %f %f %f %f %f %d %d %f %f" dum x y z1 z2 rot err sqs pxs ori refc refx refy
+	set output [ format "%s %d %7.4f %7.4f %8.6f %d\n#DQMR %s %9.6f dm %1.3f ro %1.2f dx %1.0f sq %d or %d rf %1.0f ex %1.0f av %1.0f st %1.0f mx %1.0f mn %d ec %1.3f el %1.3f co %1.3f ln %1.3f dn %1.3f sh" $name  $im_id [ expr $x/1000. ] [ expr $y/1000. ] [ expr 1./(0.5*($z1+$z2)) ] $time $name [ expr 0.5*($z1-$z2) ] $rot $err $sqs $ori $refc [ expr 1000000*$exposure ] $avg $std $max $min $error_code $edges_per_line $contrast $bright_noise $dim_noise $sharpness]
+
+	set f [open $config(run_results) a]
+	puts $f $output
+	close $f
+	LWDAQ_print $info(text) $output blue
+
+	if { $imageok == 1 } {
+		set fns [file join [file dirname $config(run_results)] $name]
+	}
+	set result $output
+}
+
+config:
+	image_source    daq
+	analysis_enable {2}
+	daq_source_ip_addr {*}
+	intensify {exact}
+	daq_adjust_flash {1}
+	daq_subtract_background {0}
+	peak_min {140}
+	peak_max {160}
+	extended_parameters {0.3 0.95}
+	analysis_max_tries {20}
+	flash_seconds_max {0.5}
+	flash_seconds_reduce {0.8}
+	flash_seconds_step {0.000001}
+	flash_seconds_transition {0.000010}
+	flash_max_tries {60}
+end.
+
+
+default:
+instrument: Thermometer
+default_post_processing: {
+	set time [clock seconds]
+	set error_code 0
+	set im_id 0
+	eval $metadata
+	set im_id $imid
+	scan $result "%s %f %f " dum temp tsd	
+	if { $tsd < 0.001 || $tsd > 0.2 } {
+		set error_code -1 
+	}
+ 	if { [regexp {TBA_901_*} $name]} {
+		if { $tsd < 4.00  } {
+			set error_code 2
+		}
+	} 
+
+	set output [ format "%s %d 0 0 %9.3f %9.4f %d %d  " $name $im_id $temp $tsd $error_code $time ]
+	set f [open $config(run_results) a]
+	puts $f $output
+	close $f
+	LWDAQ_print $info(text) $output blue
+	set result $output
+}
+
+config:
+	image_source    "daq"
+	analysis_enable          "2"
+end.
+
+default:
+instrument: Diagnostic
+default_post_processing: {
+	set error_code 0
+	set im_id 0
+	eval $metadata
+	set im_id $imid
+	set time [clock seconds]
+	set ip_addr $iconfig(daq_ip_addr)
+	set driver_sock $iconfig(daq_driver_socket)
+	set retries [expr $iinfo(psc_num_tries)-$iconfig(daq_psc) ]
+	scan $result "%s %d %d %d %d %d %d %f %f %f %f %f %f %f %f" dum0 dum1 dum2 dum3 dum4 dum5 dum6 pos5V pos5C pos15V pos15C neg15V neg15C dum7 dum8
+	set output [ format "%s %d %3.3f %3.3f %3.3f %3.3f %3.3f %3.3f %s %s %d %d" $name $im_id $pos15V $pos15C $pos5V $pos5C $neg15V $neg15C $ip_addr $driver_sock $time $retries ]
+	set result $output
+}
+
+config:
+	psc_max_tries {10}
+end.
+

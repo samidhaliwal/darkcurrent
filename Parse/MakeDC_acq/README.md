@@ -1,0 +1,2 @@
+#Create acquisifier files for darkcurrent
+Take existing acquisifier files (modify path to point to local location) and create files for dark current readings. Essentially, no longer taking multiple images for light sources. Running each ccd once for 100 ms.
